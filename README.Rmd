@@ -1,0 +1,38 @@
+---
+output: github_document
+---
+
+<!-- README.md is generated from README.Rmd. Please edit that file -->
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.path = "man/figures/README-",
+  out.width = "100%"
+)
+```
+
+# BIOsubmissions
+
+<!-- badges: start -->
+<!-- badges: end -->
+
+This package contains functions to generate data files in various formats to conform to submission standards for
+various international data platforms. Currently it contains functions to generate
+data files for CCHDO, SDG and OCADS. The package is under development and more functions will be added in the future.
+The starting point for all data is assumed to be a BCD format, which is a custom format
+used internally at BIO with data from BioChem but can be replicated by pulling data from BioChem
+with the SQL query in the `BCD_query.sql` file in the `inst` directory.
+
+## Installation
+
+You can install the development version of BIOsubmissions like so:
+
+``` r
+devtools::install_github("eogrady21/BIOsubmissions")
+```
+
+## Example
+
+
