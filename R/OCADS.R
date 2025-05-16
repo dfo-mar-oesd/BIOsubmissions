@@ -54,112 +54,117 @@ convert_OCADS <- function(data, biochem.password, biochem.username) {
     stop("data must be a data frame")
   }
   # check that data is in BCD format
-bcdkeycols <- c("MISSION_DESCRIPTOR",
-                "DATA_TYPE_METHOD",
-                "DIS_DETAIL_DATA_VALUE",
-                "DIS_DETAIL_DATA_QC_CODE",
-                "DIS_DETAIL_COLLECTOR_SAMP_ID")
-if (!all(bcdkeycols %in% colnames(data))) {
-  stop("data must be in BCD format")
-}
+  bcdkeycols <- c("MISSION_DESCRIPTOR",
+                  "DATA_TYPE_METHOD",
+                  "DIS_DETAIL_DATA_VALUE",
+                  "DIS_DETAIL_DATA_QC_CODE",
+                  "DIS_DETAIL_COLLECTOR_SAMP_ID")
+  if (!all(bcdkeycols %in% colnames(data))) {
+    stop("data must be in BCD format")
+  }
   # check that only one mission is in file
   if (length(unique(data$MISSION_DESCRIPTOR)) > 1) {
     stop("data must contain only one mission")
   }
 
- # Gather platform and expocode ----
-# WARNINGS:
+  # Gather platform and expocode ----
+  # WARNINGS:
   # - expo code automatically generated, assumes  mission descriptor country and platform codes are correct
 
-# GRAB PLATFORM NAME from lookup
-# Extract the first four characters of the mission descriptor
-ship_code <- substr(unique(data$MISSION_DESCRIPTOR), 1, 4)
-# Query lookup database for platform name
-query <- paste0("SELECT name FROM platforms WHERE ICES_SHIPC_ship_codes = '", ship_code, "'")
-platform_name <-  dbGetQuery(con_lookup, query)
-if (nrow(platform_name) == 0) {
-  stop("Platform name not found in lookup table")
-}
-# GENERATE EXPOCODE
-expocode <- paste0(substr(unique(data$MISSION_DESCRIPTOR), 1, 4),
-                   min(format(as.Date(
-                     data$DIS_HEADER_SDATE, format = '%m/%d/%Y'),
-                     '%Y%m%d')))
-if (length(grep('NA', x = expocode)) != 0) {
-  stop("EXPOCODE not properly generated, ensure DATE format is %m/%d/%Y")
-}
+  # GRAB PLATFORM NAME from lookup
+  # Extract the first four characters of the mission descriptor
+  ship_code <- substr(unique(data$MISSION_DESCRIPTOR), 1, 4)
+  # Query lookup database for platform name
+  query <- paste0("SELECT name FROM platforms WHERE ICES_SHIPC_ship_codes = '", ship_code, "'")
+  platform_name <-  dbGetQuery(con_lookup, query)
+  if (nrow(platform_name) == 0) {
+    stop("Platform name not found in lookup table")
+  }
+  # GENERATE EXPOCODE
+  expocode <- paste0(substr(unique(data$MISSION_DESCRIPTOR), 1, 4),
+                     min(format(as.Date(
+                       data$DIS_HEADER_SDATE, format = '%m/%d/%Y'),
+                       '%Y%m%d')))
+  if (length(grep('NA', x = expocode)) != 0) {
+    stop("EXPOCODE not properly generated, ensure DATE format is %m/%d/%Y")
+  }
 
-query <- paste0("SELECT DISTINCT biochem.bcdiscretehedrs.sounding, biochem.bcevents.collector_event_id FROM biochem.bcdiscretehedrs INNER JOIN biochem.bcevents ON biochem.bcevents.event_seq = biochem.bcdiscretehedrs.event_seq INNER JOIN biochem.bcmissions ON biochem.bcmissions.mission_seq = biochem.bcevents.mission_seq INNER JOIN biochem.bcdiscretedtails ON biochem.bcdiscretehedrs.discrete_seq = biochem.bcdiscretedtails.discrete_seq INNER JOIN biochem.bcdatatypes ON biochem.bcdatatypes.data_type_seq = biochem.bcdiscretedtails.data_type_seq WHERE biochem.bcmissions.descriptor = '", unique(data$MISSION_DESCRIPTOR), "' ")
-soundings <- dbGetQuery(con_biochem, query)
-if (nrow(soundings) == 0) {
-  stop("No sounding data found in BioChem")
-}
-soundings <- soundings %>%
-  mutate(COLLECTOR_EVENT_ID = as.numeric(COLLECTOR_EVENT_ID))
+  query <- paste0("SELECT DISTINCT biochem.bcdiscretehedrs.sounding, biochem.bcevents.collector_event_id FROM biochem.bcdiscretehedrs INNER JOIN biochem.bcevents ON biochem.bcevents.event_seq = biochem.bcdiscretehedrs.event_seq INNER JOIN biochem.bcmissions ON biochem.bcmissions.mission_seq = biochem.bcevents.mission_seq INNER JOIN biochem.bcdiscretedtails ON biochem.bcdiscretehedrs.discrete_seq = biochem.bcdiscretedtails.discrete_seq INNER JOIN biochem.bcdatatypes ON biochem.bcdatatypes.data_type_seq = biochem.bcdiscretedtails.data_type_seq WHERE biochem.bcmissions.descriptor = '", unique(data$MISSION_DESCRIPTOR), "' ")
+  soundings <- dbGetQuery(con_biochem, query)
+  if (nrow(soundings) == 0) {
+    stop("No sounding data found in BioChem")
+  }
+  soundings <- soundings %>%
+    mutate(
+      COLLECTOR_EVENT_ID = as.numeric(as.character(COLLECTOR_EVENT_ID))
+    )
+  # reformat BCD to OCADS (wide) ----
+  # Initial data processing
+  dataw <- data %>%
+    pivot_wider(names_from = DATA_TYPE_METHOD,
+                values_from = c(DIS_DETAIL_DATA_VALUE, DIS_DETAIL_DATA_QC_CODE)) %>%
+    mutate(
+      EVENT_COLLECTOR_EVENT_ID = as.numeric(as.character(EVENT_COLLECTOR_EVENT_ID))
+    ) %>%
+    # RENAME EXISTING COLUMNS
+    rename( NAME = "MISSION_DESCRIPTOR",
+            STNNBR = "EVENT_COLLECTOR_STN_NAME",
+            CASTNO = "EVENT_COLLECTOR_EVENT_ID",
+            SAMPNO = "DIS_DETAIL_COLLECTOR_SAMP_ID",
+            DATE = "DIS_HEADER_SDATE",
+            TIME = "DIS_HEADER_STIME",
+            LATITUDE = "DIS_HEADER_SLAT",
+            LONGITUDE = "DIS_HEADER_SLON",
+            DEPTH = "DIS_HEADER_START_DEPTH",
+            BTL_LAT = "DIS_HEADER_SLAT",
+            BTL_LON = "DIS_HEADER_SLON"
+    ) %>%
+    mutate(BTL_DATE = DATE,
+           BTL_TIME = TIME) %>%
+    # ADD COLUMNS FROM LOOKUP & BIOCHEM
+    mutate(PLATFORM = platform_name$name) %>%
+    mutate(EXPOCODE = expocode) %>%
+    # join soundings by event id
+    left_join(soundings, by = c("CASTNO" = "COLLECTOR_EVENT_ID")) %>%
+    # Remove extra biochem columns
+    select(-DIS_DATA_NUM,
+           -DIS_HEADER_END_DEPTH,
+           -DIS_DETAIL_DATA_TYPE_SEQ,
+           -DIS_DETAIL_DETECTION_LIMIT,
+           -DIS_DETAIL_DETAIL_COLLECTOR,
+           -CREATED_BY,
+           -CREATED_DATE,
+           -DATA_CENTER_CODE,
+           -PROCESS_FLAG,
+           -BATCH_SEQ,
+           -DIS_SAMPLE_KEY_VALUE)
 
-# reformat BCD to OCADS (wide) ----
-# Initial data processing
- dataw <- data %>%
-   pivot_wider(names_from = DATA_TYPE_METHOD,
-               values_from = c(DIS_DETAIL_DATA_VALUE, DIS_DETAIL_DATA_QC_CODE)) %>%
-   # RENAME EXISTING COLUMNS
-   rename( NAME = "MISSION_DESCRIPTOR",
-          STNNBR = "EVENT_COLLECTOR_STN_NAME",
-          CASTNO = "EVENT_COLLECTOR_EVENT_ID",
-          SAMPNO = "DIS_DETAIL_COLLECTOR_SAMP_ID",
-          DATE = "DIS_HEADER_SDATE",
-          TIME = "DIS_HEADER_STIME",
-          LATITUDE = "DIS_HEADER_SLAT",
-          LONGITUDE = "DIS_HEADER_SLON",
-          DEPTH = "DIS_HEADER_START_DEPTH",
-          BTL_LAT = "DIS_HEADER_SLAT",
-          BTL_LON = "DIS_HEADER_SLON"
-          ) %>%
-   mutate(BTL_DATE = DATE,
-          BTL_TIME = TIME) %>%
- # ADD COLUMNS FROM LOOKUP & BIOCHEM
-   mutate(PLATFORM = platform_name$name) %>%
-   mutate(EXPOCODE = expocode) %>%
-# join soundings by event id
-   left_join(soundings, by = c("CASTNO" = "COLLECTOR_EVENT_ID")) %>%
-   # Remove extra biochem columns
-   select(-DIS_DATA_NUM,
-          -DIS_HEADER_END_DEPTH,
-          -DIS_DETAIL_DATA_TYPE_SEQ,
-          -DIS_DETAIL_DETECTION_LIMIT,
-          -DIS_DETAIL_DETAIL_COLLECTOR,
-          -CREATED_BY,
-          -CREATED_DATE,
-          -DATA_CENTER_CODE,
-          -PROCESS_FLAG,
-          -BATCH_SEQ,
-          -DIS_SAMPLE_KEY_VALUE)
 
+  # translate methods ----
+  datacols <- grep(names(dataw), pattern = "DIS_DETAIL_DATA_VALUE")
+  og_methods <- gsub(names(dataw)[datacols], pattern = "DIS_DETAIL_DATA_VALUE_", replacement = "")
 
-# translate methods ----
- datacols <- grep(names(dataw), pattern = "DIS_DETAIL_DATA_VALUE")
+  for (i in datacols) {
+    # grab data column and qc column
+    bcmethod <- gsub("DIS_DETAIL_DATA_VALUE_", "", names(dataw)[i])
+    qccol <- grep(paste0("DIS_DETAIL_DATA_QC_CODE_", bcmethod), names(dataw))
 
- for (i in datacols) {
-   # grab data column and qc column
-   bcmethod <- gsub("DIS_DETAIL_DATA_VALUE_", "", names(dataw)[i])
-   qccol <- grep(paste0("DIS_DETAIL_DATA_QC_CODE_", bcmethod), names(dataw))
+    # translate method name
+    query <- paste0("SELECT CCHDO FROM methods WHERE BIOCHEM = '", bcmethod, "'")
+    cchdo_method <- dbGetQuery(con_lookup, query)
+    if (nrow(cchdo_method) == 0) {
+      warning("Method name ", bcmethod, " not found in lookup table. Data discarded!")
+    } else{
+      dataw <- dataw %>%
+        rename_at(vars(i), ~ cchdo_method[[1]]) %>%
+        rename_at(vars(qccol), ~ paste0(cchdo_method[[1]], "_FLAG_W"))
+    }
+  }
 
-   # translate method name
-   query <- paste0("SELECT CCHDO FROM methods WHERE BIOCHEM = '", bcmethod, "'")
-   cchdo_method <- dbGetQuery(con_lookup, query)
-   if (nrow(cchdo_method) == 0) {
-     warning("Method name ", bcmethod, " not found in lookup table. Data discarded!")
-   } else{
-   dataw <- dataw %>%
-     rename_at(vars(i), ~ cchdo_method[[1]]) %>%
-     rename_at(vars(qccol), ~ paste0(cchdo_method[[1]], "_FLAG_W"))
-   }
- }
-
- # remove any untranslated methods
- dataw <- dataw %>%
-   select(-contains("DIS_DETAIL_DATA_VALUE_")) %>%
-   select(-contains("DIS_DETAIL_DATA_QC_CODE_"))
+  # remove any untranslated methods
+  dataw <- dataw %>%
+    select(-contains("DIS_DETAIL_DATA_VALUE_")) %>%
+    select(-contains("DIS_DETAIL_DATA_QC_CODE_"))
 
 
   # translate QC flags ----
@@ -225,8 +230,8 @@ soundings <- soundings %>%
       dataavg[[n]] <- gsub(dataavg[[n]], pattern = 'NaN', replacement = '9')
 
     } else {
-    dataavg[[n]] <- gsub(dataavg[[n]], pattern = 'NA', replacement = '-999')
-    dataavg[[n]] <- gsub(dataavg[[n]], pattern = 'NaN', replacement = '-999')
+      dataavg[[n]] <- gsub(dataavg[[n]], pattern = 'NA', replacement = '-999')
+      dataavg[[n]] <- gsub(dataavg[[n]], pattern = 'NaN', replacement = '-999')
     }
   }
 
@@ -253,11 +258,27 @@ soundings <- soundings %>%
   flag_columns <- grep("_FLAG_W$", colnames(data_conv), value = TRUE)
   data_columns <- sub("_FLAG_W$", "", flag_columns)
 
+
   for (i in seq_along(unit_row)) {
     if (names(data_conv)[i] %in% data_columns) {
       query <- paste0("select Unit from methods where CCHDO = '", names(data_conv)[i], "'")
       unit <- dbGetQuery(con_lookup, query)
-      unit_row[i] <- unit$Unit
+      if (length(unit$Unit) > 1){
+        # check original data name
+        query <- paste0("select Unit from methods where CCHDO = '", names(data_conv)[i], "' and BIOCHEM in ('", str_c(og_methods, collapse = "', '"), "')")
+        #WANRING will only work if there is only one data type per parameter in original data for example if there are multiple temps (ie. Temp_CTD_1990 and Temp_CTD_1968, this will fail)
+        unit <- dbGetQuery(con_lookup, query)
+      }
+      if (nrow(unit) == 1){
+        unit_row[i] <- unit$Unit
+      } else {
+        if (nrow(unit) == 0){
+          stop(paste("Could not idenitfy unit for", names(data_conv)[i],'with query:', query))
+        }
+        if (nrow(unit) > 1){
+          stop(paste("Multiple units found for", names(data_conv)[i],'with query:', query))
+        }
+      }
     } else {
       unit_row[i] <- ''
     }
@@ -330,7 +351,7 @@ soundings <- soundings %>%
         stop('Missing data flags are not properly assigned!')
       }
     }
-   }
+  }
 
 
   # Check no NA values
@@ -356,7 +377,7 @@ soundings <- soundings %>%
 
     # check an unconverted variable
     if (ogdat %>% filter(DATA_TYPE_METHOD == 'Pressure') %>% select(DIS_DETAIL_DATA_VALUE) !=
-      cdat$CTDPRS) {
+        cdat$CTDPRS) {
       stop('Data integrity error detected: Data values have been misassigned!')
     }
 
@@ -369,7 +390,7 @@ soundings <- soundings %>%
     }
     if (flag_mapping(ogflags) != cflags && cflags != '6') {
       if (cflags != '9'){
-      stop('Data integrity error detected: Data flags have been misassigned!')
+        stop('Data integrity error detected: Data flags have been misassigned!')
       }
     }
 

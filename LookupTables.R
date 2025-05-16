@@ -72,4 +72,11 @@ dbDisconnect(con)
 
 amon <- data.frame(BioChem = 'NH3_Tech_F', CCHDO = 'NH3', Unit = 'UMOL/KG')
 
+
+
 dbWriteTable(con_lookup, 'methods', amon, append = TRUE)
+
+# add temp 1968
+TMP <- data.frame(BioChem = 'Temp_CTD_1968', CCHDO = 'CTDTMP', Unit = 'ITS-68')
+dbWriteTable(con, 'methods', TMP, append = TRUE)
+
