@@ -131,7 +131,7 @@ convert_OCADS <- function(data, biochem.password, biochem.username) {
            -DIS_HEADER_END_DEPTH,
            -DIS_DETAIL_DATA_TYPE_SEQ,
            -DIS_DETAIL_DETECTION_LIMIT,
-           -DIS_DETAIL_DETAIL_COLLECTOR,
+           -DIS_DETAIL_COLLECTOR,
            -CREATED_BY,
            -CREATED_DATE,
            -DATA_CENTER_CODE,
@@ -488,7 +488,8 @@ perform_unit_conversions <- function(data) {
     mutate(
       potden_nut = (swSigmaTheta(
         ifelse(CTDSAL == -999, NA, as.numeric(CTDSAL)),
-        ifelse(CTDTMP == -999, 15, as.numeric(CTDTMP)), # assumes default of 15 deg if no temperature data is available
+        21, #use Peter's lab temp 21 deg C
+        #ifelse(CTDTMP == -999, 15, as.numeric(CTDTMP)), # updated Dec 2025
         ifelse(CTDPRS == -999, NA, as.numeric(CTDPRS)),
         latitude = as.numeric(BTL_LAT),
         longitude = as.numeric(BTL_LON),
