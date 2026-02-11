@@ -80,3 +80,31 @@ dbWriteTable(con_lookup, 'methods', amon, append = TRUE)
 TMP <- data.frame(BioChem = 'Temp_CTD_1968', CCHDO = 'CTDTMP', Unit = 'ITS-68')
 dbWriteTable(con, 'methods', TMP, append = TRUE)
 
+# add filtered nutrients
+# add temp 1968
+nuts <- data.frame(
+  BioChem = c('NH3_Filt_F',
+              'NH3_Filt_Fsh',
+              'PO4_Filt_F',
+              'PO4_Filt_Fsh',
+              'NO2NO3_Filt_F',
+              'NO2NO3_Filt_Fsh',
+              'NO2_Filt_F',
+              'NO2_Filt_Fsh',
+              'SiO4_Filt_F',
+              'SiO4_Filt_Fsh'
+              ),
+  CCHDO = c('NH3',
+            'NH3',
+            'PHSPHT',
+            'PHSPHT',
+            'NO2+NO3',
+            'NO2+NO3',
+            'NITRIT',
+            'NITRIT',
+            'SILCAT',
+            'SILCAT'
+
+            ),
+  Unit = 'UMOL/KG')
+dbWriteTable(con, 'methods', nuts, append = TRUE)
