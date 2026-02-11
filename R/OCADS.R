@@ -488,7 +488,7 @@ perform_unit_conversions <- function(data) {
     mutate(
       potden_nut = (swSigmaTheta(
         ifelse(CTDSAL == -999, NA, as.numeric(CTDSAL)),
-        21, #use Peter's lab temp 21 deg C
+        rep(21, nrow(dataavg)), #use Peter's lab temp 21 deg C
         #ifelse(CTDTMP == -999, 15, as.numeric(CTDTMP)), # updated Dec 2025
         ifelse(CTDPRS == -999, NA, as.numeric(CTDPRS)),
         latitude = as.numeric(BTL_LAT),
