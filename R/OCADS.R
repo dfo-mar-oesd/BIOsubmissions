@@ -19,12 +19,15 @@
 #'
 #' @param biochem.password chr, string with your BioChem password
 #' @param biochem.username chr, string with your BioChem username
+#' @param prompt_notes logical, whether to prompt for submission notes after conversion (default: TRUE)
 #'
-#' Note: A bioChem connection is used in this function to pull the sounding data
-#' which is not typically included in the BCD format. Future development should
-#' include providing an alternative solution, such as a csv sounding file input
-#' or the option to skip over an attempt to connect to BioChem and produce a data
-#'  file without SOUNDING (although there should be a user warning)
+#' All data values and quality control flags are extracted directly from BioChem, ensuring
+#' complete traceability and consistency. The function performs automated validation checks for:
+#' - Expected carbonate chemistry parameters (ALKALI, PH_TOT, TCARBN, PCO2)
+#' - Expected tracer parameters (CFC-11, CFC-12, CFC-113, SF6)
+#' - Missing or suspicious QC flags (e.g., all zeros indicating no QC applied)
+#'
+#' BioChem connection is required to pull sounding data (bottom depth) for each station.
 #'
 #' @return a dataframe formatted for upload to OCADS
 #' @export
@@ -35,25 +38,20 @@
 #'                  show_col_types = FALSE)
 #' ocads_data <- convert_OCADS(data, biochem.password, biochem.user)
 
-convert_OCADS <- function(data, biochem.password, biochem.username) {
+convert_OCADS <- function(data, biochem.password, biochem.username, prompt_notes = TRUE) {
   require(tidyverse)
   require(RSQLite)
   require(DBI)
   require(ROracle)
 
   # connect to databases ----
-  # biochem
-  con_biochem <- open_biochem(user = biochem.user, pass= biochem.password)
-
-  # lookups
-  con_lookup <- dbConnect(RSQLite::SQLite(), 'lookup.sqlite')
-
+  con_biochem <- open_biochem(user = biochem.username, pass = biochem.password)
+  con_lookup  <- dbConnect(RSQLite::SQLite(), 'lookup.sqlite')
 
   # input validation ----
-  if (is.data.frame(data) == FALSE) {
+  if (!is.data.frame(data)) {
     stop("data must be a data frame")
   }
-  # check that data is in BCD format
   bcdkeycols <- c("MISSION_DESCRIPTOR",
                   "DATA_TYPE_METHOD",
                   "DIS_DETAIL_DATA_VALUE",
@@ -62,71 +60,64 @@ convert_OCADS <- function(data, biochem.password, biochem.username) {
   if (!all(bcdkeycols %in% colnames(data))) {
     stop("data must be in BCD format")
   }
-  # check that only one mission is in file
   if (length(unique(data$MISSION_DESCRIPTOR)) > 1) {
     stop("data must contain only one mission")
   }
 
   # Gather platform and expocode ----
-  # WARNINGS:
-  # - expo code automatically generated, assumes  mission descriptor country and platform codes are correct
-
-  # GRAB PLATFORM NAME from lookup
-  # Extract the first four characters of the mission descriptor
-  ship_code <- substr(unique(data$MISSION_DESCRIPTOR), 1, 4)
-  # Query lookup database for platform name
-  query <- paste0("SELECT name FROM platforms WHERE ICES_SHIPC_ship_codes = '", ship_code, "'")
-  platform_name <-  dbGetQuery(con_lookup, query)
+  ship_code    <- substr(unique(data$MISSION_DESCRIPTOR), 1, 4)
+  query        <- paste0("SELECT name FROM platforms WHERE ICES_SHIPC_ship_codes = '", ship_code, "'")
+  platform_name <- dbGetQuery(con_lookup, query)
   if (nrow(platform_name) == 0) {
     stop("Platform name not found in lookup table")
   }
-  # GENERATE EXPOCODE
+
   expocode <- paste0(substr(unique(data$MISSION_DESCRIPTOR), 1, 4),
-                     min(format(as.Date(
-                       data$DIS_HEADER_SDATE, format = '%m/%d/%Y'),
-                       '%Y%m%d')))
+                     min(format(as.Date(data$DIS_HEADER_SDATE, format = '%m/%d/%Y'), '%Y%m%d')))
   if (length(grep('NA', x = expocode)) != 0) {
     stop("EXPOCODE not properly generated, ensure DATE format is %m/%d/%Y")
   }
 
-  query <- paste0("SELECT DISTINCT biochem.bcdiscretehedrs.sounding, biochem.bcevents.collector_event_id FROM biochem.bcdiscretehedrs INNER JOIN biochem.bcevents ON biochem.bcevents.event_seq = biochem.bcdiscretehedrs.event_seq INNER JOIN biochem.bcmissions ON biochem.bcmissions.mission_seq = biochem.bcevents.mission_seq INNER JOIN biochem.bcdiscretedtails ON biochem.bcdiscretehedrs.discrete_seq = biochem.bcdiscretedtails.discrete_seq INNER JOIN biochem.bcdatatypes ON biochem.bcdatatypes.data_type_seq = biochem.bcdiscretedtails.data_type_seq WHERE biochem.bcmissions.descriptor = '", unique(data$MISSION_DESCRIPTOR), "' ")
+  query <- paste0(
+    "SELECT DISTINCT biochem.bcdiscretehedrs.sounding, biochem.bcevents.collector_event_id ",
+    "FROM biochem.bcdiscretehedrs ",
+    "INNER JOIN biochem.bcevents ON biochem.bcevents.event_seq = biochem.bcdiscretehedrs.event_seq ",
+    "INNER JOIN biochem.bcmissions ON biochem.bcmissions.mission_seq = biochem.bcevents.mission_seq ",
+    "INNER JOIN biochem.bcdiscretedtails ON biochem.bcdiscretehedrs.discrete_seq = biochem.bcdiscretedtails.discrete_seq ",
+    "INNER JOIN biochem.bcdatatypes ON biochem.bcdatatypes.data_type_seq = biochem.bcdiscretedtails.data_type_seq ",
+    "WHERE biochem.bcmissions.descriptor = '", unique(data$MISSION_DESCRIPTOR), "' "
+  )
   soundings <- dbGetQuery(con_biochem, query)
   if (nrow(soundings) == 0) {
     stop("No sounding data found in BioChem")
   }
   soundings <- soundings %>%
-    mutate(
-      COLLECTOR_EVENT_ID = as.numeric(as.character(COLLECTOR_EVENT_ID))
-    )
+    mutate(COLLECTOR_EVENT_ID = as.numeric(as.character(COLLECTOR_EVENT_ID)))
+
   # reformat BCD to OCADS (wide) ----
-  # Initial data processing
   dataw <- data %>%
-    pivot_wider(names_from = DATA_TYPE_METHOD,
-                values_from = c(DIS_DETAIL_DATA_VALUE, DIS_DETAIL_DATA_QC_CODE)) %>%
-    mutate(
-      EVENT_COLLECTOR_EVENT_ID = as.numeric(as.character(EVENT_COLLECTOR_EVENT_ID))
+    pivot_wider(
+      names_from  = DATA_TYPE_METHOD,
+      values_from = c(DIS_DETAIL_DATA_VALUE, DIS_DETAIL_DATA_QC_CODE)
     ) %>%
-    # RENAME EXISTING COLUMNS
-    rename( NAME = "MISSION_DESCRIPTOR",
-            STNNBR = "EVENT_COLLECTOR_STN_NAME",
-            CASTNO = "EVENT_COLLECTOR_EVENT_ID",
-            SAMPNO = "DIS_DETAIL_COLLECTOR_SAMP_ID",
-            DATE = "DIS_HEADER_SDATE",
-            TIME = "DIS_HEADER_STIME",
-            LATITUDE = "DIS_HEADER_SLAT",
-            LONGITUDE = "DIS_HEADER_SLON",
-            DEPTH = "DIS_HEADER_START_DEPTH",
-            BTL_LAT = "DIS_HEADER_SLAT",
-            BTL_LON = "DIS_HEADER_SLON"
+    mutate(EVENT_COLLECTOR_EVENT_ID = as.numeric(as.character(EVENT_COLLECTOR_EVENT_ID))) %>%
+    rename(
+      NAME      = "MISSION_DESCRIPTOR",
+      STNNBR    = "EVENT_COLLECTOR_STN_NAME",
+      CASTNO    = "EVENT_COLLECTOR_EVENT_ID",
+      SAMPNO    = "DIS_DETAIL_COLLECTOR_SAMP_ID",
+      DATE      = "DIS_HEADER_SDATE",
+      TIME      = "DIS_HEADER_STIME",
+      LATITUDE  = "DIS_HEADER_SLAT",
+      LONGITUDE = "DIS_HEADER_SLON",
+      DEPTH     = "DIS_HEADER_START_DEPTH",
+      BTL_LAT   = "DIS_HEADER_SLAT",
+      BTL_LON   = "DIS_HEADER_SLON"
     ) %>%
-    mutate(BTL_DATE = DATE,
-           BTL_TIME = TIME) %>%
-    # ADD COLUMNS FROM LOOKUP & BIOCHEM
+    mutate(BTL_DATE = DATE, BTL_TIME = TIME) %>%
     mutate(PLATFORM = platform_name$name) %>%
     mutate(EXPOCODE = expocode) %>%
-    # join soundings by event id
     left_join(soundings, by = c("CASTNO" = "COLLECTOR_EVENT_ID")) %>%
-    # Remove extra biochem columns
     select(-DIS_DATA_NUM,
            -DIS_HEADER_END_DEPTH,
            -DIS_DETAIL_DATA_TYPE_SEQ,
@@ -139,52 +130,216 @@ convert_OCADS <- function(data, biochem.password, biochem.username) {
            -BATCH_SEQ,
            -DIS_SAMPLE_KEY_VALUE)
 
-
   # translate methods ----
-  datacols <- grep(names(dataw), pattern = "DIS_DETAIL_DATA_VALUE")
-  og_methods <- gsub(names(dataw)[datacols], pattern = "DIS_DETAIL_DATA_VALUE_", replacement = "")
+  # Store original method names (BioChem names extracted from column names)
+  # Use exact matching: column names are "DIS_DETAIL_DATA_VALUE_<method>"
+  # so we extract the method by removing the prefix, then match exactly.
 
-  for (i in datacols) {
-    # grab data column and qc column
-    bcmethod <- gsub("DIS_DETAIL_DATA_VALUE_", "", names(dataw)[i])
-    qccol <- grep(paste0("DIS_DETAIL_DATA_QC_CODE_", bcmethod), names(dataw))
+  all_colnames <- names(dataw)
 
-    # translate method name
-    query <- paste0("SELECT CCHDO FROM methods WHERE BIOCHEM = '", bcmethod, "'")
-    cchdo_method <- dbGetQuery(con_lookup, query)
-    if (nrow(cchdo_method) == 0) {
-      warning("Method name ", bcmethod, " not found in lookup table. Data discarded!")
-    } else{
-      dataw <- dataw %>%
-        rename_at(vars(i), ~ cchdo_method[[1]]) %>%
-        rename_at(vars(qccol), ~ paste0(cchdo_method[[1]], "_FLAG_W"))
+  # Identify data value columns using exact prefix matching
+  data_prefix <- "DIS_DETAIL_DATA_VALUE_"
+  qc_prefix   <- "DIS_DETAIL_DATA_QC_CODE_"
+
+  data_colnames_all <- all_colnames[startsWith(all_colnames, data_prefix)]
+  qc_colnames_all   <- all_colnames[startsWith(all_colnames, qc_prefix)]
+
+  # Extract BioChem method names from column names by removing prefix
+  # Use exact suffix stripping to avoid partial matching issues
+  bc_methods_from_data <- sub(paste0("^", data_prefix), "", data_colnames_all)
+  bc_methods_from_qc   <- sub(paste0("^", qc_prefix),   "", qc_colnames_all)
+
+  # Store original methods for unit lookup later
+  og_methods <- bc_methods_from_data
+
+  message("\n--- Method Translation Lookup ---")
+
+  # Build mapping: CCHDO param -> list of exact BioChem data col names and qc col names
+  cchdo_to_data_exact <- list()  # CCHDO param -> character vector of data column names
+  cchdo_to_qc_exact   <- list()  # CCHDO param -> character vector of qc column names
+  discarded_methods   <- c()
+
+  for (bc in bc_methods_from_data) {
+    # Construct exact column names using string paste, NOT grep
+    data_col_name <- paste0(data_prefix, bc)
+    qc_col_name   <- paste0(qc_prefix,   bc)
+
+    # Verify columns actually exist (they should, but sanity check)
+    if (!data_col_name %in% all_colnames) {
+      warning("Expected data column '", data_col_name, "' not found. Skipping.")
+      next
+    }
+    if (!qc_col_name %in% all_colnames) {
+      warning("Expected QC column '", qc_col_name, "' not found. Skipping.")
+      next
+    }
+
+    # Look up CCHDO name
+    query        <- paste0("SELECT CCHDO FROM methods WHERE BIOCHEM = '", bc, "'")
+    cchdo_result <- dbGetQuery(con_lookup, query)
+
+    if (nrow(cchdo_result) == 0) {
+      message("  [DISCARDED] BioChem method '", bc, "' -> not found in lookup table")
+      discarded_methods <- c(discarded_methods, data_col_name, qc_col_name)
+    } else {
+      param <- cchdo_result[[1]]
+      message("  [MAPPED]    BioChem method '", bc, "' -> CCHDO parameter '", param, "'")
+      cchdo_to_data_exact[[param]] <- c(cchdo_to_data_exact[[param]], data_col_name)
+      cchdo_to_qc_exact[[param]]   <- c(cchdo_to_qc_exact[[param]],   qc_col_name)
     }
   }
 
-  # remove any untranslated methods
-  dataw <- dataw %>%
-    select(-contains("DIS_DETAIL_DATA_VALUE_")) %>%
-    select(-contains("DIS_DETAIL_DATA_QC_CODE_"))
+  message("\n--- Applying Translations ---")
 
+  for (param in names(cchdo_to_data_exact)) {
+    src_data_cols <- cchdo_to_data_exact[[param]]
+    src_qc_cols   <- cchdo_to_qc_exact[[param]]
+
+    if (length(src_data_cols) == 1) {
+      # -------------------------------------------------------
+      # Simple 1-to-1 case: rename columns directly
+      # -------------------------------------------------------
+      message("  [RENAME]  '", src_data_cols, "' -> '", param, "'")
+      message("  [RENAME]  '", src_qc_cols,   "' -> '", paste0(param, "_FLAG_W"), "'")
+
+      dataw <- dataw %>%
+        rename(!!param                    := !!src_data_cols) %>%
+        rename(!!paste0(param, "_FLAG_W") := !!src_qc_cols)
+
+    } else {
+      # -------------------------------------------------------
+      # Many-to-1 case: coalesce all source columns into one
+      # -------------------------------------------------------
+      bc_names <- sub(paste0("^", data_prefix), "", src_data_cols)
+      message("  [COALESCE] BioChem methods (", paste(bc_names, collapse = ", "),
+              ") -> '", param, "'")
+
+      dataw <- dataw %>%
+        mutate(
+          !!param                    := coalesce(!!!syms(src_data_cols)),
+          !!paste0(param, "_FLAG_W") := coalesce(!!!syms(src_qc_cols))
+        ) %>%
+        select(-all_of(src_data_cols)) %>%
+        select(-all_of(src_qc_cols))
+    }
+  }
+
+  message("\n--- Final Column State After Translation ---")
+  message("  Columns present: ", paste(names(dataw), collapse = ", "))
+
+  # remove any untranslated / discarded method columns
+  dataw <- dataw %>%
+    select(-any_of(discarded_methods)) %>%
+    select(-contains(data_prefix)) %>%
+    select(-contains(qc_prefix))
+
+  # Data Validation and Quality Checks ----
+  message("\n--- BioChem Data Quality Validation ---")
+  
+  # Define expected parameters for carbonate chemistry and tracers
+  expected_carbonate <- c("ALKALI", "PH_TOT", "TCARBN", "PCO2")
+  expected_tracers   <- c("CFC-11", "CFC-12", "CFC113", "SF6")
+  
+  # Check for carbonate chemistry parameters
+  missing_carbonate <- setdiff(expected_carbonate, names(dataw))
+  present_carbonate <- intersect(expected_carbonate, names(dataw))
+  
+  if (length(present_carbonate) > 0) {
+    message("  [✓] Found carbonate chemistry parameters: ", paste(present_carbonate, collapse = ", "))
+    
+    # Check for missing QC flags on present carbonate parameters
+    for (param in present_carbonate) {
+      flag_col <- paste0(param, "_FLAG_W")
+      if (flag_col %in% names(dataw)) {
+        flag_values <- na.omit(unique(dataw[[flag_col]]))
+        # Check if all flags are 0 (indicating no QC has been applied)
+        if (length(flag_values) == 1 && flag_values == "0") {
+          warning("  [!] All QC flags for ", param, " are 0 - no quality control has been applied!")
+        }
+        # Check if flags are missing entirely
+        if (length(flag_values) == 0 || all(is.na(dataw[[flag_col]]))) {
+          warning("  [!] QC flags for ", param, " are missing or all NA!")
+        }
+      } else {
+        warning("  [!] Missing QC flag column for ", param)
+      }
+    }
+  }
+  
+  if (length(missing_carbonate) > 0) {
+    message("  [NOTE] Missing carbonate chemistry parameters: ", paste(missing_carbonate, collapse = ", "))
+    message("         This may be expected if this mission did not collect carbonate chemistry data.")
+  }
+  
+  # Check for tracer parameters
+  present_tracers <- intersect(expected_tracers, names(dataw))
+  missing_tracers <- setdiff(expected_tracers, names(dataw))
+  
+  if (length(present_tracers) > 0) {
+    message("  [✓] Found tracer parameters: ", paste(present_tracers, collapse = ", "))
+    
+    # Check for missing QC flags on present tracer parameters
+    for (param in present_tracers) {
+      flag_col <- paste0(param, "_FLAG_W")
+      if (flag_col %in% names(dataw)) {
+        flag_values <- na.omit(unique(dataw[[flag_col]]))
+        if (length(flag_values) == 1 && flag_values == "0") {
+          warning("  [!] All QC flags for ", param, " are 0 - no quality control has been applied!")
+        }
+        if (length(flag_values) == 0 || all(is.na(dataw[[flag_col]]))) {
+          warning("  [!] QC flags for ", param, " are missing or all NA!")
+        }
+      } else {
+        warning("  [!] Missing QC flag column for ", param)
+      }
+    }
+  }
+  
+  if (length(missing_tracers) > 0) {
+    message("  [NOTE] Missing tracer parameters: ", paste(missing_tracers, collapse = ", "))
+    message("         This may be expected if this mission did not collect tracer data.")
+  }
+  
+  # General QC flag validation for all translated parameters
+  all_flag_cols <- grep("_FLAG_W$", names(dataw), value = TRUE)
+  for (flag_col in all_flag_cols) {
+    param_name <- sub("_FLAG_W$", "", flag_col)
+    flag_values <- na.omit(unique(dataw[[flag_col]]))
+    
+    # Check if all flags are 0
+    if (length(flag_values) == 1 && flag_values == "0") {
+      if (!param_name %in% c(present_carbonate, present_tracers)) {
+        # Only show warning if we haven't already warned about this parameter
+        warning("  [!] All QC flags for ", param_name, " are 0 - no quality control has been applied!")
+      }
+    }
+    
+    # Check for data presence without flags
+    if (param_name %in% names(dataw)) {
+      data_values <- na.omit(dataw[[param_name]])
+      if (length(data_values) > 0 && (length(flag_values) == 0 || all(is.na(dataw[[flag_col]])))) {
+        warning("  [!] ", param_name, " has data values but missing QC flags!")
+      }
+    }
+  }
+  
+  message("  [✓] Data quality validation complete\n")
 
   # translate QC flags ----
   dataw <- dataw %>%
-    mutate_at(vars(contains("_FLAG_W")), ~ flag_mapping(.))
+    mutate(across(contains("_FLAG_W"), ~ flag_mapping(.)))
 
-  # add 2 flags to CTD oxygen and salinity to denote calibration
-  #   warning assumption: all ctd salinity and oxygen are calibrated
+  # add 2 flags to CTD oxygen and salinity
   dataw <- dataw %>%
-    mutate(CTDSAL_FLAG_W = str_replace(CTDSAL_FLAG_W, '0', '2'))
+    mutate(CTDSAL_FLAG_W = str_replace(CTDSAL_FLAG_W, '0', '2'),
+           CTDOXY_FLAG_W = str_replace(CTDOXY_FLAG_W, '0', '2'))
 
-  dataw <- dataw %>%
-    mutate(CTDOXY_FLAG_W = str_replace(CTDOXY_FLAG_W, '0', '2'))
-
-  # Apply 6 flags where there are multiple replicates that will be averaged in the next step
-  methods <- grep('FLAG_W$', names(dataw), value = TRUE) %>%
+  # Apply 6 flags for replicates ----
+  methods_list <- grep('FLAG_W$', names(dataw), value = TRUE) %>%
     str_replace('_FLAG_W$', '')
 
   for (si in unique(dataw$SAMPNO)) {
-    for (m in methods) {
+    for (m in methods_list) {
       escaped_m <- escape_special_chars(m)
       datacol <- dataw %>%
         select(matches(str_glue("^{escaped_m}$"))) %>%
@@ -194,143 +349,136 @@ convert_OCADS <- function(data, biochem.password, biochem.username) {
 
       if (length(na.omit(datacol[dataw$SAMPNO == si])) > 1) {
         qcvals <- unique(dataw[[qccol]][dataw$SAMPNO == si])
-        # only apply 6 flags if data is good, do not overwrite other flags
-        if (length(na.omit(unique(qcvals))) == 1 && na.omit(unique(qcvals)) %in% c('0', '1', '2')) {
+        if (length(na.omit(unique(qcvals))) == 1 &&
+            na.omit(unique(qcvals)) %in% c('0', '1', '2')) {
           dataw <- dataw %>%
             mutate(!!qccol := if_else(SAMPNO == si & !is.na(!!sym(m)), '6', !!sym(qccol)))
         } else {
-          # if there are multiple flags, choose the highest of the replicate flags
-          # note this is not an ideal solution but it matches with current biochem protocol
           dataw <- dataw %>%
-            mutate(!!qccol := if_else(SAMPNO == si & !is.na(!!sym(m)),
-                                      as.character(max(as.numeric(qcvals), na.rm = TRUE)),
-                                      !!sym(qccol)))
+            mutate(!!qccol := if_else(
+              SAMPNO == si & !is.na(!!sym(m)),
+              as.character(max(as.numeric(qcvals), na.rm = TRUE)),
+              !!sym(qccol)
+            ))
         }
       }
     }
   }
 
-  # make qc cols numeric so they will combine properly with averaging
+  # make qc cols numeric for averaging
   qccols <- grep('FLAG', names(dataw), value = TRUE)
   dataw[qccols] <- lapply(dataw[qccols], as.numeric)
 
-
   # Average replicates ----
-  # average values within sample IDs only for numeric columns
   dataavg <- dataw %>%
     group_by(SAMPNO) %>%
-    summarise(across(everything(),
-                     ~ if(is.numeric(.)) {mean(., na.rm = TRUE)
-                     }else {unique(.)}))
+    summarise(across(everything(), ~ ifelse(is.numeric(.), mean(., na.rm = TRUE), unique(.))))
 
-  # fill NaNs with -999 and add 9 flags ----
+  # fill NaNs with -999 / 9 ----
   for (n in 1:ncol(dataavg)) {
     if (length(grep(names(dataavg)[n], pattern = 'FLAG')) > 0) {
-      dataavg[[n]] <- gsub(dataavg[[n]], pattern = 'NA', replacement = '9')
+      dataavg[[n]] <- gsub(dataavg[[n]], pattern = 'NA',  replacement = '9')
       dataavg[[n]] <- gsub(dataavg[[n]], pattern = 'NaN', replacement = '9')
-
     } else {
-      dataavg[[n]] <- gsub(dataavg[[n]], pattern = 'NA', replacement = '-999')
+      dataavg[[n]] <- gsub(dataavg[[n]], pattern = 'NA',  replacement = '-999')
       dataavg[[n]] <- gsub(dataavg[[n]], pattern = 'NaN', replacement = '-999')
     }
   }
 
   # fix date and time formatting ----
   dataavg <- dataavg %>%
-    mutate(DATE = format(as.Date(DATE, format = '%m/%d/%Y'), '%Y-%m-%d'),
-           TIME = str_pad(TIME, 4, pad = "0"),
-           BTL_DATE = format(as.Date(BTL_DATE, format = '%m/%d/%Y'), '%Y-%m-%d'),
-           BTL_TIME = str_pad(TIME, 4, pad = "0"))
+    mutate(
+      DATE     = format(as.Date(DATE,     format = '%m/%d/%Y'), '%Y-%m-%d'),
+      TIME     = str_pad(TIME, 4, pad = "0"),
+      BTL_DATE = format(as.Date(BTL_DATE, format = '%m/%d/%Y'), '%Y-%m-%d'),
+      BTL_TIME = str_pad(TIME, 4, pad = "0")
+    )
   if (length(na.omit(dataavg$DATE)) < nrow(dataavg)) {
     stop('NAs introduced to DATE column. Original data should be formatted %m/%d/%Y')
   }
 
-
   # Units ----
-
-  # convert units
   data_conv <- perform_unit_conversions(data = dataavg)
 
-  # Initialize unit_row as a character vector
-  unit_row <- character(ncol(data_conv))
-
-  # Gather unit row
+  unit_row     <- character(ncol(data_conv))
   flag_columns <- grep("_FLAG_W$", colnames(data_conv), value = TRUE)
   data_columns <- sub("_FLAG_W$", "", flag_columns)
 
-
   for (i in seq_along(unit_row)) {
-    if (names(data_conv)[i] %in% data_columns) {
-      query <- paste0("select Unit from methods where CCHDO = '", names(data_conv)[i], "'")
+    col_name <- names(data_conv)[i]
+
+    if (col_name == 'SOUNDING') {
+      unit_row[i] <- 'METERS'
+      next
+    }
+
+    if (col_name %in% data_columns) {
+      # First try: look up unit filtering by original BioChem methods
+      # Use DISTINCT to handle the case where multiple BioChem methods
+      # map to the same CCHDO parameter but have the same unit (eg PO4_Filt_F and PO4_Tech_F -> PHSPHT)
+      query <- paste0(
+        "SELECT DISTINCT Unit FROM methods WHERE CCHDO = '", col_name,
+        "' AND BIOCHEM IN ('", paste(og_methods, collapse = "', '"), "')"
+      )
       unit <- dbGetQuery(con_lookup, query)
-      if (length(unit$Unit) > 1){
-        # check original data name
-        query <- paste0("select Unit from methods where CCHDO = '", names(data_conv)[i], "' and BIOCHEM in ('", str_c(og_methods, collapse = "', '"), "')")
-        #WANRING will only work if there is only one data type per parameter in original data for example if there are multiple temps (ie. Temp_CTD_1990 and Temp_CTD_1968, this will fail)
-        unit <- dbGetQuery(con_lookup, query)
+
+      # Fall back to querying without BIOCHEM filter if no result
+      if (nrow(unit) == 0) {
+        query <- paste0("SELECT DISTINCT Unit FROM methods WHERE CCHDO = '", col_name, "'")
+        unit  <- dbGetQuery(con_lookup, query)
       }
-      if (nrow(unit) == 1){
+
+      if (nrow(unit) == 1) {
         unit_row[i] <- unit$Unit
+      } else if (nrow(unit) == 0) {
+        stop(paste("Could not identify unit for", col_name, "- no matching entry in lookup table"))
       } else {
-        if (nrow(unit) == 0){
-          stop(paste("Could not idenitfy unit for", names(data_conv)[i],'with query:', query))
-        }
-        if (nrow(unit) > 1){
-          stop(paste("Multiple units found for", names(data_conv)[i],'with query:', query))
-        }
+        # Multiple distinct units found - this is a genuine conflict that needs attention
+        stop(paste0(
+          "Multiple DISTINCT units found for '", col_name, "': ",
+          paste(unit$Unit, collapse = ", "),
+          "\nBioChem methods involved: ",
+          paste(og_methods[og_methods %in%
+                             dbGetQuery(con_lookup,
+                                        paste0("SELECT BIOCHEM FROM methods WHERE CCHDO = '", col_name, "'"))$BIOCHEM],
+                collapse = ", "),
+          "\nPlease resolve unit conflict in lookup table."
+        ))
       }
     } else {
       unit_row[i] <- ''
     }
-    if (names(data_conv)[i] == 'SOUNDING') {
-      unit_row[i] <- 'METERS'
-    }
   }
 
-  # Add units to data
-  unit_row_df <- as.data.frame(t(unit_row), stringsAsFactors = FALSE)
+  unit_row_df        <- as.data.frame(t(unit_row), stringsAsFactors = FALSE)
   names(unit_row_df) <- names(data_conv)
-  data_conv <- rbind(unit_row_df, data_conv)
-
-
-
+  data_conv          <- rbind(unit_row_df, data_conv)
   # order columns ----
-  # Standard metadata columns
-  metadata_columns <- c('EXPOCODE', 'NAME', 'PLATFORM', 'STNNBR', 'CASTNO', 'SAMPNO', 'DATE', 'TIME', 'SOUNDING')
-
-
-  # Identify metadata columns (those without matching flag columns)
-  other_columns <- setdiff(colnames(data_conv), c(metadata_columns, flag_columns, data_columns))
-
-  # Create the new column order
-  new_col_order <- c(metadata_columns, other_columns, unlist(lapply(data_columns, function(col) c(col, paste0(col, "_FLAG_W")))))
-
-  # Reorder columns in data
-  data_conv <- data_conv %>%
-    select(all_of(new_col_order))
-
-  # DATA ROUDNING? ----
-  # REID HAD INCLUDED A LOT OF DATA ROUNDING UNDER DIFFERENT CONDITIONS, BUT IS THIS NECESSARY?
-
+  metadata_columns <- c('EXPOCODE', 'NAME', 'PLATFORM', 'STNNBR', 'CASTNO',
+                        'SAMPNO', 'DATE', 'TIME', 'SOUNDING')
+  other_columns    <- setdiff(colnames(data_conv),
+                              c(metadata_columns, flag_columns, data_columns))
+  new_col_order    <- c(
+    metadata_columns,
+    other_columns,
+    unlist(lapply(data_columns, function(col) c(col, paste0(col, "_FLAG_W"))))
+  )
+  data_conv <- data_conv %>% select(all_of(new_col_order))
 
   # testing ----
-  # Data integrity checks
-  # Check that data$COLLECTOR_SAMPLE_ID and data_conv$SAMPNO have all the same unique values
-  if (!all(sort(as.numeric(unique(data$DIS_DETAIL_COLLECTOR_SAMP_ID))) == sort(as.numeric(unique(data_conv$SAMPNO))))) {
+  if (!all(sort(as.numeric(unique(data$DIS_DETAIL_COLLECTOR_SAMP_ID))) ==
+           sort(as.numeric(unique(data_conv$SAMPNO))))) {
     stop("Mismatch in unique values between data$COLLECTOR_SAMPLE_ID and data_conv$SAMPNO")
   }
 
-  # Check that the columns CTDPRS, NO2+NO3, CHLORA are all present (warning if missing)
   required_columns <- c("CTDPRS", "NO2+NO3", "CHLORA")
-  missing_columns <- setdiff(required_columns, names(data_conv))
+  missing_columns  <- setdiff(required_columns, names(data_conv))
   if (length(missing_columns) > 0) {
     warning("Missing columns: ", paste(missing_columns, collapse = ", "))
   }
 
-  # Check no missing flags in nutrient or carbonate data
-  nutrient_carbonate_cols <- c("NO2+NO3", "PHSPHT", "SILCAT", "SALNTY", "TCARBN", "PH_TOT", "ALKALI", "PCO2")
-
-  # Check that NO2+NO3, PHSPHT, SILCAT, SALNTY, TCARBN, PH_TOT, ALKALI, PCO2 have all flags above 1 if the variable is present
+  nutrient_carbonate_cols <- c("NO2+NO3", "PHSPHT", "SILCAT", "SALNTY",
+                               "TCARBN", "PH_TOT", "ALKALI", "PCO2")
   for (col in nutrient_carbonate_cols) {
     if (col %in% names(data_conv)) {
       if (any(na.omit(as.numeric(data_conv[[paste0(col, "_FLAG_W")]])) <= 1)) {
@@ -339,71 +487,95 @@ convert_OCADS <- function(data, biochem.password, biochem.username) {
     }
   }
 
-  # Check that -999 data values have all 9 flags
   for (dc in data_columns) {
     qc <- str_glue("{dc}_FLAG_W")
-    if (qc %in% names(data_conv)){
+    if (qc %in% names(data_conv)) {
       mflags <- unique(data_conv[[qc]][data_conv[[dc]] == '-999'])
-      if (length(mflags) > 1) {
-        stop("Missing data flags are not properly assigned!")
-      }
-      if (length(mflags) == 1 && !'9' %in% mflags) {
-        stop('Missing data flags are not properly assigned!')
-      }
+      if (length(mflags) > 1) stop("Missing data flags are not properly assigned!")
+      if (length(mflags) == 1 && !'9' %in% mflags) stop('Missing data flags are not properly assigned!')
     }
   }
 
+  if (any(is.na(data_conv))) stop("NA values found in data_conv")
 
-  # Check no NA values
-  if (any(is.na(data_conv))) {
-    stop("NA values found in data_conv")
-  }
-
-  # Check no missing metadata columns
-  metadata_columns <- c('EXPOCODE', 'NAME', 'PLATFORM', 'STNNBR', 'CASTNO', 'SAMPNO', 'DATE', 'TIME', 'SOUNDING')
-  if (!all(metadata_columns %in% names(data_conv))) {
-    stop("Missing metadata columns")
-  }
+  if (!all(metadata_columns %in% names(data_conv))) stop("Missing metadata columns")
 
   # Random subset of 25 data points, check that data values, and flags match from data to data_conv
-  set.seed(123) # For reproducibility
+  set.seed(123)
   sample_indices <- sample(nrow(data), 25)
   for (i in sample_indices) {
-    si <- data$DIS_DETAIL_COLLECTOR_SAMP_ID[i]
-    ogdat <- data %>%
-      filter(DIS_DETAIL_COLLECTOR_SAMP_ID == si)
-    cdat <- data_conv %>%
-      filter(SAMPNO == si)
+    si    <- data$DIS_DETAIL_COLLECTOR_SAMP_ID[i]
+    ogdat <- data %>% filter(DIS_DETAIL_COLLECTOR_SAMP_ID == si)
+    cdat  <- data_conv %>% filter(SAMPNO == si)
 
     # check an unconverted variable
-    if (ogdat %>% filter(DATA_TYPE_METHOD == 'Pressure') %>% select(DIS_DETAIL_DATA_VALUE) !=
-        cdat$CTDPRS) {
+    # pull() extracts a single vector, first() ensures scalar comparison
+    # in case of duplicate rows for same sample
+    og_pressure <- ogdat %>%
+      filter(DATA_TYPE_METHOD == 'Pressure') %>%
+      pull(DIS_DETAIL_DATA_VALUE) %>%
+      first()
+
+    conv_pressure <- cdat %>%
+      pull(CTDPRS) %>%
+      first()
+
+    if (!is.na(og_pressure) && og_pressure != conv_pressure) {
       stop('Data integrity error detected: Data values have been misassigned!')
     }
 
     # check a flag
     nitrate <- grep(unique(data$DATA_TYPE_METHOD), pattern = 'NO2NO3', value = TRUE)
-    ogflags <- unique(ogdat %>% filter(DATA_TYPE_METHOD == nitrate) %>% select(DIS_DETAIL_DATA_QC_CODE) )
-    cflags <- unique(cdat$`NO2+NO3_FLAG_W`)
-    if (length(ogflags) >1) {
-      ogflags <- max(as.numeric(ogflags))
+
+    ogflags <- ogdat %>%
+      filter(DATA_TYPE_METHOD %in% nitrate) %>%
+      pull(DIS_DETAIL_DATA_QC_CODE) %>%
+      unique()
+
+    cflags <- cdat %>%
+      pull(`NO2+NO3_FLAG_W`) %>%
+      first()
+
+    # if there were multiple replicates, take the worst flag
+    if (length(ogflags) > 1) {
+      ogflags <- as.character(max(as.numeric(ogflags), na.rm = TRUE))
     }
-    if (flag_mapping(ogflags) != cflags && cflags != '6') {
-      if (cflags != '9'){
+
+    # skip check if no nitrate data for this sample
+    if (length(ogflags) == 0 || is.na(ogflags)) next
+
+    mapped_flag <- flag_mapping(as.character(ogflags))
+
+    if (mapped_flag != cflags && cflags != '6') {
+      if (cflags != '9') {
         stop('Data integrity error detected: Data flags have been misassigned!')
       }
     }
-
-
   }
 
+  dbDisconnect(con_biochem)
+  dbDisconnect(con_lookup)
 
-
-  # close all database connections
+  # Prompt for submission notes if enabled
+  if (prompt_notes) {
+    # Extract mission and year info
+    mission_descriptor <- unique(data$MISSION_DESCRIPTOR)
+    year <- as.numeric(substr(expocode, 5, 8))
+    
+    message("\n✓ OCADS conversion complete!")
+    message("Mission: ", mission_descriptor, " (EXPOCODE: ", expocode, ")")
+    
+    # Prompt for notes
+    tryCatch({
+      prompt_submission_notes("OCADS", mission_descriptor, year)
+    }, error = function(e) {
+      message("Note: Could not prompt for submission notes. ",
+              "You can add them later using append_mission_notes()")
+    })
+  }
 
   return(data_conv)
 }
-
 
 # HELPER FUNCTIONS ----
 # Function to escape special characters
@@ -488,7 +660,7 @@ perform_unit_conversions <- function(data) {
     mutate(
       potden_nut = (swSigmaTheta(
         ifelse(CTDSAL == -999, NA, as.numeric(CTDSAL)),
-        rep(21, nrow(dataavg)), #use Peter's lab temp 21 deg C
+        rep(21, nrow(data)), #use Peter's lab temp 21 deg C
         #ifelse(CTDTMP == -999, 15, as.numeric(CTDTMP)), # updated Dec 2025
         ifelse(CTDPRS == -999, NA, as.numeric(CTDPRS)),
         latitude = as.numeric(BTL_LAT),

@@ -1,0 +1,404 @@
+---
+title: "Quick Start: Processing Oceanographic Data for International Submissions"
+author: "BIO Data Management Team"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Quick Start: Processing Oceanographic Data for International Submissions}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval = FALSE
+)
+```
+
+# Overview
+
+This guide will walk you through processing oceanographic data from BioChem and preparing it for submission to international data platforms (OCADS, CCHDO, SDG). The workflow is designed to be reproducible and catch common data quality issues that have historically caused submission rejections.
+
+## What This Package Does
+
+The `BIOsubmissions` package:
+
+- Converts BioChem BCD (BioChem Data) format to international submission formats
+- Performs unit conversions (e.g., mL/L to µmol/kg for oxygen)
+- Translates BioChem method names to standard parameter names (CCHDO/OCADS)
+- Applies quality flags according to WOCE standards
+- Validates data ranges for latitude, longitude, and oceanographic parameters
+
+## Prerequisites
+
+Before you begin, you'll need:
+
+1. **BioChem Access**: Username and password for the BioChem database
+2. **R Environment**: R (>= 4.0.0) with RStudio recommended
+3. **Required Packages**: tidyverse, ROracle, DBI, RSQLite, oce
+
+# Installation
+
+Install the package from GitHub:
+
+```{r install}
+# Install devtools if needed
+if (!require("devtools")) install.packages("devtools")
+
+# Install BIOsubmissions
+devtools::install_github("eogrady21/BIOsubmissions")
+```
+
+Load the package and dependencies:
+
+```{r setup}
+library(BIOsubmissions)
+library(tidyverse)
+library(here)
+```
+
+# Step-by-Step Workflow
+
+## Step 1: Set Up BioChem Credentials
+
+Create a file to store your BioChem credentials (NEVER commit this to Git!):
+
+```{r credentials}
+# Create a file: C:/users/YOUR_USERNAME/desktop/biochem_creds.R
+# Contents:
+biochem.user <- "your_username"
+biochem.password <- "your_password"
+```
+
+Add this file to your `.gitignore`:
+
+```
+biochem_creds.R
+*.biochem_creds.R
+```
+
+## Step 2: Extract Data Directly from BioChem
+
+**NEW:** You can now extract data directly from BioChem without using SQL Developer!
+
+```{r extract-biochem}
+# Source your credentials
+source("C:/users/ogradye/desktop/biochem_creds.R")
+
+# Extract data directly from BioChem for your mission
+data <- extract_from_biochem(
+  mission_descriptor = "LAT2025146",
+  biochem.username = biochem.user,
+  biochem.password = biochem.password
+)
+
+# Check the structure
+glimpse(data)
+```
+
+**What `extract_from_biochem()` does:**
+- Connects to BioChem automatically
+- Executes the BCD query for your mission
+- Returns data in proper BCD format with all required columns
+- Formats dates correctly (%m/%d/%Y)
+- Adds standard BioChem metadata columns
+- Performs preliminary validation:
+  - Checks for core parameters (Temperature, Salinity, Pressure)
+  - Identifies carbonate chemistry and tracer parameters
+  - Flags missing or suspicious QC codes
+  - Validates coordinates
+
+**Optional: List Available Missions**
+
+Not sure of the exact mission descriptor? You can query BioChem:
+
+```{r list-missions}
+# List all missions from 2025
+missions_2025 <- list_biochem_missions(
+  biochem.username = biochem.user,
+  biochem.password = biochem.password,
+  year = 2025
+)
+
+# List missions for a specific ship
+missions_atlantis <- list_biochem_missions(
+  biochem.username = biochem.user,
+  biochem.password = biochem.password,
+  ship_code = "18AT"
+)
+```
+
+### Alternative: Manual SQL Export (Legacy Method)
+
+If you prefer the traditional workflow or need to work offline:
+
+1. Open `inst/BCD_QUERY.sql` in SQL Developer
+2. Update the mission descriptor in the WHERE clause
+3. Run the query and export to CSV
+4. Read the CSV in R:
+
+```{r load-csv}
+data <- read_csv("LAT2025146_BCD.csv", show_col_types = FALSE)
+```
+
+## Step 3: Prepare Your Data (if needed)
+
+### Data Preparation Notes
+
+**If using `extract_from_biochem()`:** Data is already properly formatted! Skip to Step 4.
+
+**If your BCD data was extracted via SQL Developer**, you may need to manually fix some columns:
+
+```{r fix-bcd}
+# Fix date format if needed (SQL Developer may export as 'DD-MON-YY')
+data$DIS_HEADER_SDATE <- format(
+  as.Date(data$DIS_HEADER_SDATE, format = '%d-%b-%y'),
+  format = '%m/%d/%Y'
+)
+
+# Add required columns if missing
+if (!"DIS_DATA_NUM" %in% names(data)) {
+  data$DIS_DATA_NUM <- seq(1:nrow(data))
+}
+
+if (!"CREATED_BY" %in% names(data)) {
+  data$CREATED_BY <- Sys.getenv("USERNAME")  # Your Windows username
+}
+
+if (!"CREATED_DATE" %in% names(data)) {
+  data$CREATED_DATE <- Sys.Date()
+}
+
+# Add standard BioChem fields
+data$DATA_CENTER_CODE <- '20'  # BIO data center code
+data$PROCESS_FLAG <- 0
+data$BATCH_SEQ <- 1
+```
+
+### Handling Multiple Data Types for Same Parameter
+
+If you have both fresh and frozen nutrient samples, combine them to avoid naming conflicts:
+
+```{r consolidate-methods}
+data <- data %>%
+  mutate(DATA_TYPE_METHOD = case_when(
+    DATA_TYPE_METHOD %in% c('NH3_Filt_Fsh', 'NH3_Filt_F') ~ 'NH3_0',
+    DATA_TYPE_METHOD %in% c('NO2_Filt_Fsh', 'NO2_Filt_F') ~ 'NO2_0',
+    DATA_TYPE_METHOD %in% c('NO2NO3_Filt_Fsh', 'NO2NO3_Filt_F') ~ 'NO2NO3_0',
+    DATA_TYPE_METHOD %in% c('PO4_Filt_Fsh', 'PO4_Filt_F') ~ 'PO4_0',
+    DATA_TYPE_METHOD %in% c('SiO4_Filt_Fsh', 'SiO4_Filt_F') ~ 'SiO4_0',
+    TRUE ~ DATA_TYPE_METHOD
+  ))
+```
+
+## Step 4: Convert to OCADS Format
+
+The `convert_OCADS()` function handles all the complex transformations:
+
+```{r convert-ocads}
+# Convert to OCADS format
+ocads_data <- convert_OCADS(data, biochem.password, biochem.user)
+
+# Save the output
+write_csv(ocads_data,
+          file = here("data", "2025", "LAT2025146", "LAT2025146_data.csv"))
+```
+
+**What this function does:**
+- Connects to BioChem to retrieve sounding (bottom depth) data
+- **Validates data completeness**: Checks for carbonate chemistry parameters (ALKALI, PH_TOT, TCARBN, PCO2)
+- **Validates tracer data**: Checks for CFC and SF6 parameters
+- **Validates QC flags**: Identifies missing or suspicious flags (all zeros indicate no QC applied)
+- Translates BioChem method names to CCHDO/OCADS parameter names using lookup tables
+- Converts units (oxygen: mL/L → µmol/kg, nutrients: µmol/L → µmol/kg)
+- Translates BioChem QC flags (0-9) to WOCE flags (2,3,4,6,9)
+- Averages replicate measurements and assigns flag 6
+- Validates data integrity with built-in spot checks
+
+**Data Source:** All data values and QC flags are extracted directly from BioChem. The function
+will warn you if expected parameters are missing or if QC flags haven't been properly applied
+in BioChem.
+
+## Step 5: Convert to CCHDO Format (if needed)
+
+CCHDO has slightly different formatting requirements than OCADS:
+
+```{r convert-cchdo}
+# Convert OCADS output to CCHDO format
+cchdo_data <- convert_CCHDO(ocads_data)
+
+# Save with quote = 'none' for CCHDO requirements
+write_csv(cchdo_data,
+          file = here("data", "2025", "LAT2025146", "CCHDO", "LAT2025146_data.csv"),
+          quote = 'none')
+```
+
+**Key CCHDO differences:**
+- DATE format: YYYYMMDD (no dashes)
+- Column names: LATITUDE/LONGITUDE instead of BTL_LAT/BTL_LON
+- Station names: alphanumeric only
+- NH3 renamed to NH4
+
+# Understanding the Output
+
+## Data Validation Warnings
+
+During conversion, you may see validation messages about data completeness:
+
+### Carbonate Chemistry Parameters
+
+```
+[NOTE] Missing carbonate chemistry parameters: ALKALI, PH_TOT
+```
+
+**What it means:** The expected carbonate parameters weren't found in BioChem for this mission.
+
+**Action required:**
+- If this mission collected carbonate chemistry data, ensure it has been uploaded to BioChem with proper QC flags
+- If this mission didn't collect carbonate data, this warning is expected and can be ignored
+
+### Tracer Parameters
+
+```
+[NOTE] Missing tracer parameters: CFC-12, SF6
+```
+
+**What it means:** The expected tracer gases weren't found in BioChem for this mission.
+
+**Action required:**
+- If this mission collected tracer data, ensure it has been uploaded to BioChem
+- If this mission didn't collect tracer data, this warning is expected and can be ignored
+
+### QC Flag Warnings
+
+```
+[!] All QC flags for ALKALI are 0 - no quality control has been applied!
+```
+
+**What it means:** All flags are zero, suggesting that data was uploaded to BioChem without quality control.
+
+**Action required:**
+- Return to BioChem and apply proper QC flags (1-9 scale) before submission
+- Review lab QC procedures and CRM analyses
+- Update flags in BioChem, then re-extract and re-run conversion
+
+```
+[!] TCARBN has data values but missing QC flags!
+```
+
+**What it means:** Data exists but no quality flags were found.
+
+**Action required:**
+- Add QC flags to BioChem for this parameter
+- Flags should be based on CRM accuracy, replicate precision, and analyst review
+
+## File Structure
+
+The output CSV files have a special structure:
+
+```
+Row 1: Units (e.g., METERS, µmol/kg, PSU)
+Row 2+: Data values
+```
+
+Example:
+```
+EXPOCODE,STNNBR,DEPTH,CTDSAL,NO2+NO3,NO2+NO3_FLAG_W
+18QL20230504,AR7W01,METERS,PSU,µmol/kg,
+18QL20230504,AR7W01,5.2,35.1,12.3,2
+```
+
+## Quality Flags (WOCE Standards)
+
+The `_FLAG_W` columns use WOCE quality codes:
+
+- **2**: Acceptable (good quality)
+- **3**: Questionable (use with caution)
+- **4**: Bad (do not use)
+- **6**: Replicate measurement (average of multiple samples)
+- **9**: Missing data (value = -999)
+
+## Missing Data Convention
+
+Missing or unavailable data is represented as:
+- Data values: `-999`
+- Quality flags: `9`
+
+# Troubleshooting
+
+## Common Errors
+
+### "Platform name not found in lookup table"
+
+**Problem**: Ship code not recognized
+
+**Solution**: Update the platforms lookup table:
+```{r update-platform}
+# Check current platforms
+con <- dbConnect(RSQLite::SQLite(), 'lookup.sqlite')
+dbReadTable(con, "platforms")
+dbDisconnect(con)
+
+# Add missing platform (if needed)
+# Contact database administrator or update LookupTables.R
+```
+
+### "EXPOCODE not properly generated"
+
+**Problem**: Date format in BCD data is incorrect
+
+**Solution**: Ensure dates are in `%m/%d/%Y` format (e.g., 05/14/2025)
+
+### "Multiple DISTINCT units found"
+
+**Problem**: Conflicting units for a parameter in lookup table
+
+**Solution**: This indicates a data quality issue. Review the specific parameter and resolve the unit conflict before proceeding.
+
+### "No sounding data found in BioChem"
+
+**Problem**: Cannot retrieve bottom depth for stations
+
+**Solution**: 
+1. Verify mission descriptor is correct
+2. Check if mission exists in BioChem
+3. Ensure your BioChem credentials have proper access
+
+## Validation Warnings
+
+The conversion process includes automatic validation. Pay attention to warnings:
+
+- **Latitude/Longitude out of range**: Check for sign errors or missing decimals
+- **Parameter outside typical range**: May indicate data entry errors
+- **Missing decimal places**: Precision loss in coordinates
+
+# Next Steps
+
+After generating your submission files:
+
+1. **Review the output**: Open in Excel or R and spot-check values
+2. **Check validation reports**: Address any warnings
+3. **Prepare metadata**: Each platform requires additional metadata files
+4. **Submit**: Follow platform-specific submission procedures (see submission guide vignette)
+
+# Additional Resources
+
+- **Submission Guide**: See `vignette("submission-guide")` for platform-specific instructions
+- **BioChem Query**: `inst/BCD_QUERY.sql` for the standard extraction query
+- **Lookup Tables**: `LookupTables.R` for managing reference data
+- **Function Documentation**: `?convert_OCADS`, `?convert_CCHDO`
+
+# Getting Help
+
+Common issues and solutions:
+
+1. **Update lookup tables**: If new ships or methods are added
+2. **Check BioChem connection**: Verify credentials and VPN status
+3. **Review data format**: Ensure BCD format matches expectations
+4. **Contact**: Previous data manager or BioChem administrator
+
+---
+
+*Last updated: `r Sys.Date()`*

@@ -1,23 +1,4 @@
----
-output: github_document
----
-
-<!-- README.md is generated from README.Rmd. Please edit that file -->
-
-```{r, include = FALSE}
-knitr::opts_chunk$set(
-  collapse = TRUE,
-  comment = "#>",
-  fig.path = "man/figures/README-",
-  out.width = "100%",
-  eval = FALSE
-)
-```
-
 # BIOsubmissions
-
-<!-- badges: start -->
-<!-- badges: end -->
 
 ## Overview
 
@@ -31,15 +12,12 @@ knitr::opts_chunk$set(
 
 ### Key Features
 
-✅ **Direct BioChem Integration**: All data and QC flags pulled directly from database  
-✅ **No SQL Client Required**: Extract data with `extract_from_biochem()` - no SQL Developer needed  
 ✅ **Automated Format Conversion**: BCD → OCADS → CCHDO  
 ✅ **Unit Conversions**: Oxygen (mL/L → µmol/kg), Nutrients (µmol/L → µmol/kg)  
 ✅ **Quality Flag Translation**: BioChem (0-9) → WOCE (2,3,4,6,9)  
-✅ **Data Validation**: Automated checks for missing parameters and QC flags  
+✅ **Data Validation**: Catches lat/lon errors, range issues, precision loss  
 ✅ **Replicate Handling**: Averages replicates and applies appropriate flags  
-✅ **Method Translation**: BioChem → CCHDO/OCADS standard parameter names  
-✅ **Quality Checks**: Validates carbonate chemistry, tracers, and QC flag completeness
+✅ **Method Translation**: BioChem → CCHDO/OCADS standard parameter names
 
 ### What Problems Does This Solve?
 
@@ -54,7 +32,7 @@ This package prevents these issues through automated validation and standardized
 
 ## Installation
 
-```{r install}
+```r
 # Install devtools if not already installed
 if (!require("devtools")) install.packages("devtools")
 
@@ -65,7 +43,7 @@ devtools::install_github("eogrady21/BIOsubmissions")
 ## Dependencies
 
 The package requires:
-```{r dependencies}
+```r
 install.packages(c("tidyverse", "DBI", "RSQLite", "ROracle", "oce"))
 ```
 
@@ -77,7 +55,7 @@ You'll also need:
 
 ### 1. Set Up BioChem Credentials
 
-```{r credentials}
+```r
 # Create: C:/users/YOUR_USERNAME/desktop/biochem_creds.R
 biochem.user <- "your_username"
 biochem.password <- "your_password"
@@ -87,29 +65,22 @@ biochem.password <- "your_password"
 
 ### 2. Extract Data from BioChem
 
-**NEW - Recommended Method:** Extract directly from BioChem in R:
-
-```{r extract}
-# Extract data for your mission
-data <- extract_from_biochem("LAT2025146", biochem.user, biochem.password)
-```
-
-**Alternative (Legacy):** Use the SQL query in `inst/BCD_QUERY.sql` to extract data for your mission from BioChem via SQL Developer. Save the result as a CSV file.
+Use the SQL query in `inst/BCD_QUERY.sql` to extract data for your mission from BioChem. Save the result as a CSV file.
 
 ### 3. Basic Workflow
 
-``Extract data directly from BioChem (NEW!)
-data <- extract_from_biochem("LAT2025146", biochem.user, biochem.password)
+```r
+library(BIOsubmissions)
+library(tidyverse)
 
-# Convert to OCADS format
-ocads_data <- convert_OCADS(data, biochem.password, biochem.user)
+# Source credentials
+source("C:/users/ogradye/desktop/biochem_creds.R")
 
 # Read BCD data
 data <- read_csv("LAT2025146_BCD.csv", show_col_types = FALSE)
 
 # Convert to OCADS format
 ocads_data <- convert_OCADS(data, biochem.password, biochem.user)
-# ✓ You'll be prompted to add submission notes after conversion!
 
 # Save OCADS output
 write_csv(ocads_data, "LAT2025146_OCADS.csv")
@@ -123,81 +94,24 @@ write_csv(cchdo_data, "LAT2025146_CCHDO.csv", quote = 'none')
 
 ## Main Functions
 
-### `extract_from_biochem()` - NEW!
-
-**Streamlined workflow:** Extract data directly from BioChem without SQL Developer.
-
-**What it does:**
-- Connects to BioChem automatically
-- Executes the BCD query for your specified mission
-- Returns properly formatted BCD data ready for `convert_OCADS()`
-- Formats dates correctly (%m/%d/%Y)
-- Adds all required BioChem metadata columns
-- Performs preliminary validation:
-  - Checks for core parameters (Temperature, Salinity, Pressure)
-  - Identifies carbonate chemistry and tracer parameters  
-  - Flags missing or all-zero QC codes
-  - Validates coordinate ranges
-
-**Usage:**
-```{r extract-fn}
-# Basic usage
-data <- extract_from_biochem("LAT2025146", biochem.user, biochem.password)
-
-# Credentials will be prompted if not provided
-data <- extract_from_biochem("CAR2023573")
-
-# Disable validation checks (not recommended)
-data <- extract_from_biochem("18QL23573", biochem.user, biochem.password, validate = FALSE)
-```
-
-**Helper function:** `list_biochem_missions()`
-
-Not sure of the mission descriptor? Query BioChem for available missions:
-
-```{r list-fn}
-# List missions from 2025
-missions <- list_biochem_missions(biochem.user, biochem.password, year = 2025)
-
-# List missions for a specific ship
-missions <- list_biochem_missions(biochem.user, biochem.password, ship_code = "18HU")
-```
-
 ### `convert_OCADS()`
 
 Converts BioChem BCD format to OCADS format.
 
 **What it does:**
 - Connects to BioChem to retrieve sounding (bottom depth) data
-- Extracts all data values and QC flags directly from BioChem
-- **Validates data completeness**: Checks for expected carbonate chemistry parameters (ALKALI, PH_TOT, TCARBN, PCO2)
-- **Validates tracer presence**: Checks for CFC and SF6 data
-- **Validates QC flags**: Identifies parameters with missing or suspicious flags (e.g., all zeros)
 - Translates BioChem method names using lookup tables
 - Converts units for oxygen, nutrients, and chlorophyll
-- Applies WOCE quality flags (BioChem 0-9 → WOCE 2,3,4,6,9)
+- Applies WOCE quality flags
 - Averages replicate measurements
-- Validates data integrity with spot checks
-- **Prompts you to add submission notes** (can be disabled with `prompt_notes = FALSE`)
-
-**Data Source:** All data and QC flags are extracted directly from BioChem, ensuring complete
-traceability and eliminating the need for manual data entry from lab files.
+- Validates data integrity
 
 **Usage:**
-```{r ocads}
-# Default: prompts for notes after conversion
+```r
 ocads_data <- convert_OCADS(
   data = bcd_dataframe,
   biochem.password = "your_password",
   biochem.username = "your_username"
-)
-
-# Disable notes prompting (for automated workflows)
-ocads_data <- convert_OCADS(
-  data = bcd_dataframe,
-  biochem.password = "your_password",
-  biochem.username = "your_username",
-  prompt_notes = FALSE
 )
 ```
 
@@ -227,57 +141,12 @@ Converts OCADS format to CCHDO exchange format.
 - Sets depth unit in first row
 
 **Usage:**
-```{r cchdo}
+```r
 cchdo_data <- convert_CCHDO(ocads_data)
 
 # IMPORTANT: Write with quote = 'none' for CCHDO
 write_csv(cchdo_data, "output.csv", quote = 'none')
 ```
-
-## Mission Notes and Logging
-
-The package includes a comprehensive system for tracking submission notes, troubleshooting, and manual adjustments organized by platform and mission.
-
-**Why use mission notes?**
-- Document issues and solutions for future reference
-- Track accession numbers and submission contacts
-- Record manual corrections made to data or metadata
-- Build institutional knowledge across submissions
-
-**Quick usage:**
-```{r mission-notes}
-# After completing a submission, add notes interactively
-prompt_submission_notes("OCADS", "BBMP", 2023)
-
-# Or programmatically
-append_mission_notes(
-  platform = "OCADS",
-  mission = "BBMP",
-  year = 2023,
-  notes = c(
-    "- Accession: 0240502",
-    "- Fixed CTDFLUOR to CTD",
-    "- Updated pH metadata"
-  )
-)
-
-# Before a new submission, check previous notes
-read_mission_notes("OCADS", "BBMP", 2022)
-
-# Search across all missions
-search_mission_notes("pH")
-
-# List all missions with notes
-list_mission_notes("OCADS")
-```
-
-**What to document:**
-- Accession numbers and submission contacts
-- Manual corrections to data or metadata
-- Issues encountered and how they were resolved
-- Action items for future submissions
-
-See `vignette("mission-notes")` for complete documentation and best practices.
 
 ## Data Preparation Tips
 
@@ -285,7 +154,7 @@ See `vignette("mission-notes")` for complete documentation and best practices.
 
 If you extracted data via SQL Developer, you may need preprocessing:
 
-```{r preprocessing}
+```r
 # Fix date format (SQL Developer exports as DD-MON-YY)
 data$DIS_HEADER_SDATE <- format(
   as.Date(data$DIS_HEADER_SDATE, format = '%d-%b-%y'),
@@ -305,7 +174,7 @@ data$BATCH_SEQ <- 1
 
 Combine fresh and frozen samples to avoid naming conflicts:
 
-```{r consolidate}
+```r
 data <- data %>%
   mutate(DATA_TYPE_METHOD = case_when(
     DATA_TYPE_METHOD %in% c('NH3_Filt_Fsh', 'NH3_Filt_F') ~ 'NH3_0',
@@ -346,7 +215,7 @@ EXPOCODE,STNNBR,DEPTH,CTDSAL,NO2+NO3,NO2+NO3_FLAG_W
 
 For detailed guidance, see the package vignettes:
 
-```{r vignettes}
+```r
 # Quick start guide for new users
 vignette("quickstart", package = "BIOsubmissions")
 
@@ -355,10 +224,12 @@ vignette("submission-guide", package = "BIOsubmissions")
 ```
 
 Or access function documentation:
-```{r help}
+```r
 ?convert_OCADS
 ?convert_CCHDO
 ```
+
+**For new employees**: See `HANDOFF_DOCUMENTATION.md` for complete package overview and maintenance procedures.
 
 ## Troubleshooting
 
@@ -386,30 +257,24 @@ BIOsubmissions/
 │   ├── OCADS.R          # Main conversion function
 │   ├── CCHDO.R          # CCHDO-specific formatting
 │   ├── SDG.R            # SDG formatting (in development)
-│   ├── mission_notes.R  # Mission notes management
 │   └── update_lookup.R  # Lookup table management
 ├── inst/
 │   ├── BCD_QUERY.sql    # Standard BioChem extraction query
-│   ├── examples/        # Usage examples
 │   └── extdata/         # Example files
-├── log/                 # Mission submission notes (organized by platform)
-│   ├── OCADS/          # OCADS submission logs
-│   ├── SDG/            # SDG submission logs
-│   └── README.md       # Logging system documentation
 ├── vignettes/
-│   ├── quickstart.Rmd        # Getting started guide
-│   ├── submission-guide.Rmd  # Platform submission instructions
-│   └── mission-notes.Rmd     # Mission notes system guide
+│   ├── quickstart.Rmd   # Getting started guide
+│   └── submission-guide.Rmd  # Platform submission instructions
 ├── lookup.sqlite        # Reference tables (ships, methods, units)
-├── CCHDO_template.R     # Legacy template (see vignettes for new workflow)
-└── OCADS_template.R     # Legacy template (see vignettes for new workflow)
+├── HANDOFF_DOCUMENTATION.md  # Complete handoff guide for new maintainers
+├── CCHDO_template.R     # Updated template using convert_CCHDO()
+└── OCADS_template.R     # Updated template with documentation
 ```
 
 ## Updating Lookup Tables
 
 To add new ships or methods:
 
-```{r update-lookup}
+```r
 # View current tables
 con <- dbConnect(RSQLite::SQLite(), 'lookup.sqlite')
 dbReadTable(con, "platforms")
@@ -432,6 +297,7 @@ For new methods, ships, or bug fixes:
 - **Package issues**: Contact current data manager
 - **BioChem access**: biochem@dfo-mpo.gc.ca
 - **Submission questions**: See `vignette("submission-guide")`
+- **Handoff/Training**: See `HANDOFF_DOCUMENTATION.md`
 
 ## Citation
 
@@ -450,6 +316,4 @@ Internal use within DFO. Contact maintainer for external use permissions.
 ---
 
 **Maintainer**: Emily O'Grady (eogrady21)  
-**Last Updated**: `r Sys.Date()`
-
-
+**Last Updated**: May 2026

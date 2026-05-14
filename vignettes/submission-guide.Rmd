@@ -1,0 +1,485 @@
+---
+title: "Platform Submission Guide: OCADS, CCHDO, and SDG"
+author: "BIO Data Management Team"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Platform Submission Guide: OCADS, CCHDO, and SDG}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval = FALSE
+)
+```
+
+# Overview
+
+This guide provides detailed instructions for submitting oceanographic data to three international data platforms:
+
+1. **OCADS** - Ocean Carbon Data System
+2. **CCHDO** - CLIVAR and Carbon Hydrographic Data Office
+3. **SDG** - Sustainable Development Goals (UN)
+
+Each platform has specific requirements, submission procedures, and metadata needs.
+
+---
+
+# OCADS: Ocean Carbon Data System
+
+## About OCADS
+
+OCADS is hosted by the Japan Agency for Marine-Earth Science and Technology (JAMSTEC) and serves as a repository for ocean carbon and related oceanographic data.
+
+**Website**: https://oceans.imas.utas.edu.au/OCADS/ (or current URL)
+
+## Data Requirements
+
+### File Format
+- **Format**: CSV (comma-separated values)
+- **Encoding**: UTF-8
+- **Quote style**: Standard (quotes allowed)
+- **Missing data**: -999 for values, 9 for flags
+
+### Required Parameters
+At minimum, OCADS submissions should include:
+- Station information (EXPOCODE, STNNBR, CASTNO)
+- Position (LATITUDE, LONGITUDE)
+- Date and time
+- Depth/Pressure (DEPTH or CTDPRS)
+- At least one measured parameter with quality flags
+
+### Recommended Parameters for Carbon Studies
+- **Nutrients**: NO2+NO3, PHSPHT, SILCAT
+- **Carbonate system**: TCARBN, ALKALI, PH_TOT, PCO2
+- **Physical**: CTDSAL, CTDTMP, CTDOXY
+- **Biological**: CHLORA
+
+## Preparing Your Submission
+
+```{r ocads-prep}
+library(BIOsubmissions)
+library(tidyverse)
+
+# Source credentials
+source("C:/users/ogradye/desktop/biochem_creds.R")
+
+# Load and prepare data
+data <- read_csv("mission_BCD.csv")
+
+# Convert to OCADS format
+ocads_data <- convert_OCADS(data, biochem.password, biochem.user)
+
+# Save the file
+write_csv(ocads_data, "MISSION_OCADS_submission.csv")
+```
+
+## Required Metadata
+
+All data values and quality control flags are pulled directly from BioChem, ensuring traceability
+and consistency. However, you still need to prepare a separate metadata file (text or Word document) with:
+
+1. **Cruise Information**
+   - Cruise ID / Mission descriptor
+   - Ship name
+   - Dates (start and end)
+   - Geographic region
+
+2. **Principal Investigator**
+   - Name
+   - Institution
+   - Email
+   - ORCID (if available)
+
+3. **Methods** (obtained from BioChem metadata and lab SOPs)
+   - Sample collection procedures
+   - Analytical methods for each parameter
+   - Detection limits
+   - Calibration procedures
+   - Reference materials used (e.g., CRM batch numbers from BioChem)
+
+4. **Quality Control** (documented in BioChem)
+   - Replicate analysis frequency (handled automatically by package)
+   - Accuracy estimates (from CRM analyses stored in BioChem)
+   - Precision estimates (from replicate analyses in BioChem)
+   - Known issues or limitations
+
+5. **Data Processing**
+   - Software used: BIOsubmissions R package
+   - Conversion factors applied (automated by package)
+   - Flag meanings: WOCE standards (BioChem 0-9 → WOCE 2,3,4,6,9)
+   - Data source: BioChem database (extracted via BCD query)
+
+## Submission Process
+
+1. **Validate your data file**
+   - Check that all required columns are present
+   - Verify flag columns exist for each data column
+   - Confirm date formats are correct (YYYY-MM-DD)
+   - Review warnings from `convert_OCADS()`
+
+2. **Prepare metadata document**
+   - Use the template above
+   - Be thorough - metadata is critical for data usability
+
+3. **Submit via email or web portal**
+   - Contact: (check OCADS website for current submission contact)
+   - Subject line: "Data Submission - [MISSION_DESCRIPTOR]"
+   - Attach data file and metadata
+   - Request confirmation of receipt
+
+4. **Respond to reviewer feedback**
+   - OCADS may request clarifications or corrections
+   - Common issues: coordinate precision, unit clarification, flag documentation
+
+## Common OCADS Rejection Reasons
+
+Based on historical submissions:
+
+- ❌ **Latitude/Longitude precision loss**: Missing decimal places
+- ❌ **Incorrect sign on longitude**: Western longitudes should be negative
+- ❌ **Out-of-range values**: Coordinates outside expected region
+- ❌ **Insufficient metadata**: Missing method descriptions
+- ❌ **Unexplained flags**: Quality flags without documentation
+
+---
+
+# CCHDO: CLIVAR and Carbon Hydrographic Data Office
+
+## About CCHDO
+
+CCHDO is hosted by UC San Diego and focuses on high-quality hydrographic data, particularly from repeat hydrography programs like GO-SHIP.
+
+**Website**: https://cchdo.ucsd.edu/
+**Submission portal**: https://cchdo.ucsd.edu/submit
+
+## Data Requirements
+
+### File Format
+- **Format**: CSV (comma-separated values)
+- **Encoding**: UTF-8
+- **Quote style**: **IMPORTANT - use `quote = 'none'`**
+- **Missing data**: -999 for values, 9 for flags
+- **Date format**: YYYYMMDD (no delimiters!)
+
+### Column Naming
+CCHDO uses standardized parameter names:
+- `CTDPRS` (pressure, dbar)
+- `CTDTMP` (temperature, °C ITS-90)
+- `CTDSAL` (salinity, PSS-78)
+- `CTDOXY` (oxygen, µmol/kg)
+- `NO2+NO3` (nitrate+nitrite, µmol/kg)
+- `PHSPHT` (phosphate, µmol/kg)
+- `SILCAT` (silicate, µmol/kg)
+
+### Unit Row
+**Critical**: The first row must contain units, not data!
+
+```
+EXPOCODE,STNNBR,DEPTH,CTDSAL,NO2+NO3,NO2+NO3_FLAG_W
+18QL20230504,AR7W01,METERS,PSU,µmol/kg,
+```
+
+## Preparing Your Submission
+
+```{r cchdo-prep}
+library(BIOsubmissions)
+library(tidyverse)
+
+# Start from OCADS output
+ocads_data <- convert_OCADS(data, biochem.password, biochem.user)
+
+# Convert to CCHDO format
+cchdo_data <- convert_CCHDO(ocads_data)
+
+# CRITICAL: Use quote = 'none'
+write_csv(cchdo_data, 
+          "MISSION_CCHDO_submission.csv",
+          quote = 'none')
+```
+
+## CCHDO Exchange Format Requirements
+
+Key differences from OCADS:
+
+1. **Date format**: YYYYMMDD (not YYYY-MM-DD)
+2. **Column names**: LATITUDE, LONGITUDE (not BTL_LAT, BTL_LON)
+3. **Station names**: Alphanumeric only (special characters removed)
+4. **Quote style**: None (`quote = 'none'`)
+5. **NH4 vs NH3**: CCHDO prefers NH4 nomenclature
+
+## Required Metadata
+
+CCHDO requires extensive documentation. All data values and QC flags come directly from BioChem:
+
+1. **Cruise Summary**
+   - EXPOCODE (ship code + date)
+   - Chief Scientist
+   - Ship name and country
+   - Ports (departure and arrival)
+   - Dates
+   - Funding agency
+
+2. **Parameters Measured**
+   - For EACH parameter, provide:
+     - PI/Analyst name and institution
+     - Method reference (publication or SOP)
+     - Instrument make/model
+     - Calibration procedure
+     - Accuracy and precision (from BioChem CRM analyses)
+     - CRM batch numbers (stored in BioChem metadata)
+
+3. **Bottle Data Processing**
+   - Fire order and bottle IDs (from BioChem)
+   - Sample collection notes
+   - Known issues or suspect data
+   - Data source: BioChem database with automated validation
+
+4. **Supporting Files** (if available)
+   - CTD data (if not already submitted)
+   - Cruise report
+   - Method documentation (SOPs)
+   - Station map
+   
+**Note:** The BIOsubmissions package automatically extracts all data and QC flags from BioChem,
+ensuring complete traceability. Metadata documentation should reference BioChem as the source
+database and note any additional quality control applied during BioChem upload.
+
+## Submission Process
+
+### Online Submission Portal
+
+1. **Create an account** at https://cchdo.ucsd.edu/submit
+   - Use your institutional email
+   - Save your login credentials
+
+2. **Start a new submission**
+   - Click "Submit Data"
+   - Select "Bottle Data"
+   - Enter EXPOCODE
+
+3. **Upload data file**
+   - Use the CCHDO-formatted CSV
+   - Portal will perform automatic validation
+   - Review and address any errors
+
+4. **Complete metadata form**
+   - Fill in all required fields
+   - Upload supporting documents
+   - Be thorough - incomplete submissions are delayed
+
+5. **Submit for review**
+   - CCHDO staff will review (usually 2-4 weeks)
+   - Respond promptly to questions
+   - Revisions may be requested
+
+### Email Submission (Alternative)
+
+If the portal is unavailable:
+
+- **To**: cchdo@ucsd.edu
+- **Subject**: Data Submission - [EXPOCODE]
+- **Attachments**: Data file + metadata document
+- **Body**: Brief description and contact information
+
+## Common CCHDO Rejection Reasons
+
+Based on historical submissions:
+
+- ❌ **Quote marks in file**: Must use `quote = 'none'`
+- ❌ **Wrong date format**: Must be YYYYMMDD
+- ❌ **Missing unit row**: First row must contain units
+- ❌ **Non-standard parameter names**: Must match CCHDO dictionary
+- ❌ **Insufficient metadata**: Especially method documentation
+- ❌ **Undocumented flags**: All non-2 flags should be explained
+
+---
+
+# SDG: Sustainable Development Goals
+
+## About SDG
+
+The UN Sustainable Development Goals include SDG 14 (Life Below Water) with specific ocean chemistry indicators. Data contributes to global assessments of ocean health.
+
+**Website**: https://sdg.data.un.org/
+
+## Data Requirements
+
+SDG submissions typically follow OCADS format but with additional requirements:
+
+### Mandatory Parameters for SDG 14.3.1
+- **Carbonate system** (at least 2 of):
+  - pH (PH_TOT)
+  - Total alkalinity (ALKALI)
+  - Dissolved inorganic carbon (TCARBN)
+  - pCO2 (PCO2)
+
+### Spatial/Temporal Coverage
+- Data should contribute to spatial or temporal coverage gaps
+- Coastal and shelf regions are priorities
+- Repeat measurements are valuable for trend detection
+
+## Preparing Your Submission
+
+```{r sdg-prep}
+library(BIOsubmissions)
+library(tidyverse)
+
+# SDG typically uses OCADS format
+ocads_data <- convert_OCADS(data, biochem.password, biochem.user)
+
+# Verify carbonate parameters are present
+required_params <- c("PH_TOT", "ALKALI", "TCARBN", "PCO2")
+available <- required_params[required_params %in% names(ocads_data)]
+
+if (length(available) >= 2) {
+  message("✓ Sufficient carbonate parameters for SDG submission")
+} else {
+  warning("⚠ SDG requires at least 2 carbonate parameters")
+}
+
+write_csv(ocads_data, "MISSION_SDG_submission.csv")
+```
+
+## Required Metadata
+
+SDG submissions should emphasize:
+
+1. **Policy Relevance**
+   - How data contributes to SDG 14.3.1
+   - Regional or national context
+   - Monitoring program description
+
+2. **Data Stewardship**
+   - Long-term data management plan
+   - Data sharing agreements
+   - Update frequency
+
+3. **Standard Metadata**
+   - All elements required for OCADS (see above)
+
+## Submission Process
+
+SDG data is typically submitted through:
+
+1. **OCADS** (primary route for ocean chemistry)
+2. **GOOS/IODE** - Integrated Ocean Observing System
+3. **National data centers** with SDG reporting
+
+**Recommended**: Submit to OCADS and indicate SDG relevance in metadata.
+
+---
+
+# Data Quality Checklist
+
+Before submitting to ANY platform, verify:
+
+## ✅ File Format
+- [ ] CSV format with proper encoding
+- [ ] Correct delimiter (comma)
+- [ ] Quote style matches platform requirements
+- [ ] Unit row present (first row for CCHDO/OCADS)
+
+## ✅ Data Completeness
+- [ ] All required columns present
+- [ ] Flag column for each data column
+- [ ] No completely empty columns
+- [ ] Station/cast/sample identifiers unique
+
+## ✅ Data Quality
+- [ ] Latitude range: -90 to 90
+- [ ] Longitude range: -180 to 180  
+- [ ] Depth values positive
+- [ ] Dates in correct format
+- [ ] No NA values (use -999 instead)
+- [ ] Parameter values within oceanographic ranges
+
+## ✅ Metadata
+- [ ] PI/analyst contact information
+- [ ] Method descriptions for each parameter
+- [ ] Calibration and QC procedures
+- [ ] Known issues documented
+- [ ] Cruise/mission summary
+
+## ✅ Documentation
+- [ ] Flag meanings explained
+- [ ] Units clearly specified
+- [ ] Conversions documented
+- [ ] References cited
+
+---
+
+# After Submission
+
+## Timeline Expectations
+
+- **OCADS**: 2-4 weeks for initial review
+- **CCHDO**: 2-6 weeks depending on complexity
+- **SDG**: Variable (depends on routing)
+
+## Following Up
+
+If you haven't heard back in the expected timeline:
+
+1. Check spam folder for emails
+2. Email the submission contact
+3. Reference your submission ID or EXPOCODE
+4. Be patient but persistent
+
+## Data Citations
+
+Once accepted:
+
+- OCADS: DOI assigned for dataset
+- CCHDO: Data available at https://cchdo.ucsd.edu/cruise/[EXPOCODE]
+- SDG: Included in global assessments
+
+Request proper citations in publications using the data!
+
+---
+
+# Contact Information
+
+## BIO Data Management
+- **Current contact**: [Update with current data manager]
+- **BioChem support**: biochem@dfo-mpo.gc.ca
+
+## Platform Contacts
+- **OCADS**: Check https://oceans.imas.utas.edu.au/OCADS/ for current contact
+- **CCHDO**: cchdo@ucsd.edu
+- **SDG/UN**: https://unstats.un.org/sdgs/
+
+---
+
+# Appendix: Historical Issues Log
+
+Common problems encountered in past submissions:
+
+## Issue: Missing Negative on Longitude
+**Symptom**: Western Atlantic longitudes appear as positive
+**Cause**: Data entry or export error from BioChem
+**Solution**: Verify and manually correct if needed
+
+## Issue: Latitude Missing Decimals  
+**Symptom**: All latitudes are whole numbers (e.g., 44 instead of 44.267)
+**Cause**: Excel formatting or CSV export issue
+**Solution**: Re-export from source with full precision
+
+## Issue: Depth Units Confusion
+**Symptom**: CCHDO rejects because DEPTH is in centimeters not meters
+**Cause**: BioChem stores depth in cm
+**Solution**: `convert_OCADS()` handles this automatically
+
+## Issue: Multiple Unit Conflicts
+**Symptom**: Error during conversion about multiple units
+**Cause**: Lookup table has conflicting entries
+**Solution**: Review and update lookup table to resolve
+
+---
+
+*Last updated: `r Sys.Date()`*
+*For questions about this guide, contact the BIO data management team.*

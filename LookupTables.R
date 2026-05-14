@@ -15,7 +15,7 @@ con <- dbConnect(RSQLite::SQLite(), db_file)
 data <- read.csv(csv_file)
 
 # Step 3: Write the data frame to the SQLite database
-dbWriteTable(con, "platforms", data, overwrite = FALSE, row.names = FALSE)
+dbWriteTable(con, "platforms", data, overwrite = TRUE, row.names = FALSE)
 
 # Step 4: Verify the data has been inserted correctly
 result <- dbReadTable(con, "platforms")
@@ -108,3 +108,34 @@ nuts <- data.frame(
             ),
   Unit = 'UMOL/KG')
 dbWriteTable(con, 'methods', nuts, append = TRUE)
+
+# add generic nutrients
+nuts <- data.frame(
+  BioChem = c('NH3_0',
+              'PO4_0',
+              'NO2NO3_0',
+              'NO2_0',
+              'SiO4_0'
+  ),
+  CCHDO = c('NH3',
+            'PHSPHT',
+            'NO2+NO3',
+            'NITRIT',
+            'SILCAT'
+
+  ),
+  Unit = 'UMOL/KG')
+dbWriteTable(con, 'methods', nuts, append = TRUE)
+
+# add new ctd chl
+
+# Add ammonia method
+
+chl <- data.frame(BioChem = 'Chl_a_CTD_Fluor',
+                  CCHDO = 'CTDFLUOR',
+                  Unit = 'MG/M^3')
+
+
+
+dbWriteTable(con, 'methods', chl, append = TRUE)
+

@@ -1,0 +1,407 @@
+---
+title: "Mission Notes and Submission Logging"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Mission Notes and Submission Logging}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+# Mission Notes System
+
+The BIOsubmissions package includes a comprehensive logging system to track submission notes, troubleshooting steps, and manual adjustments for each mission. This system helps maintain institutional knowledge and ensures consistency across submissions.
+
+## Overview
+
+The mission notes system provides:
+
+- **Organized storage** of notes by platform (OCADS, SDG) and mission
+- **Easy retrieval** of historical submission information
+- **Search functionality** to find specific issues or solutions
+- **Interactive prompts** to capture notes after each submission
+- **Structured format** for consistency
+
+## Directory Structure
+
+Notes are stored in the `log/` directory organized by platform and mission:
+
+```
+log/
+├── OCADS/
+│   ├── BBMP/
+│   │   ├── 2021.md
+│   │   └── 2022.md
+│   ├── AZOMP/
+│   │   ├── AT4802_2022.md
+│   │   └── AT4805_2022.md
+│   └── JC/
+│       └── JC24301.md
+└── SDG/
+    └── 2024.md
+```
+
+## Basic Usage
+
+### Reading Notes
+
+To read notes for a specific mission:
+
+```{r, eval=FALSE}
+library(BIOsubmissions)
+
+# Read BBMP 2022 notes
+notes <- read_mission_notes("OCADS", "BBMP", 2022)
+cat(notes, sep = "\n")
+
+# Read JC24301 notes
+notes <- read_mission_notes("OCADS", "JC24301")
+cat(notes, sep = "\n")
+```
+
+### Adding Notes
+
+#### After a Submission (Interactive)
+
+The easiest way to add notes is using the interactive prompt after completing a submission:
+
+```{r, eval=FALSE}
+
+# Prompt for notes
+prompt_submission_notes("OCADS", "BBMP", 2023)
+```
+
+This will:
+1. Show existing notes (if any)
+2. Ask if you want to add notes
+3. Let you type notes line by line
+4. Automatically timestamp and format your entry
+
+#### Programmatically Adding Notes
+
+You can also add notes programmatically:
+
+```{r, eval=FALSE}
+# Append to existing notes
+append_mission_notes(
+  platform = "OCADS",
+  mission = "BBMP",
+  year = 2023,
+  notes = c(
+    "Fixed pH metadata issue",
+    "Updated investigator list",
+    "Accession: 0228686"
+  )
+)
+```
+
+### Listing All Missions
+
+To see all missions with notes:
+
+```{r, eval=FALSE}
+# List all missions
+all_missions <- list_mission_notes()
+print(all_missions)
+
+# List only OCADS missions
+ocads_missions <- list_mission_notes("OCADS")
+print(ocads_missions)
+```
+
+### Searching Notes
+
+Search across all mission notes for specific information:
+
+```{r, eval=FALSE}
+# Search for pH-related issues
+ph_issues <- search_mission_notes("pH")
+print(ph_issues)
+
+# Search for accession numbers in OCADS submissions
+accessions <- search_mission_notes("accession", platform = "OCADS")
+print(accessions)
+
+# Case-sensitive search
+exact_match <- search_mission_notes("CTD", ignore_case = FALSE)
+```
+
+## Automatic Integration
+
+**The conversion functions now automatically prompt for notes!**
+
+When you use `convert_OCADS()` or `convert_CCHDO()`, the functions will automatically prompt you to add submission notes after the conversion is complete.
+
+### OCADS Conversion with Auto-Prompting
+
+```{r, eval=FALSE}
+# Default behavior: prompts for notes after conversion
+ocads_data <- convert_OCADS(bcd_data, biochem.password, biochem.username)
+# After conversion completes, you'll be prompted:
+# "Would you like to add submission notes? (y/n):"
+
+# To disable prompting (if you want to add notes later)
+ocads_data <- convert_OCADS(bcd_data, biochem.password, biochem.username, 
+                            prompt_notes = FALSE)
+```
+
+### CCHDO Conversion with Optional Prompting
+
+```{r, eval=FALSE}
+# Default: no prompt (notes typically added during OCADS conversion)
+cchdo_data <- convert_CCHDO(ocads_data)
+
+# Enable prompting for CCHDO-specific submissions
+cchdo_data <- convert_CCHDO(ocads_data, prompt_notes = TRUE)
+```
+
+### Benefits of Auto-Prompting
+
+- **Don't forget**: Captures notes right after conversion while details are fresh
+- **Extract info automatically**: Mission and year information extracted from data
+- **Optional**: Can disable if you prefer to add notes manually later
+- **Graceful fallback**: If prompting fails, you can add notes later
+
+### Example Full Workflow
+
+```{r, eval=FALSE}
+library(BIOsubmissions)
+library(tidyverse)
+
+# Read your data
+bcd_data <- read_csv("mission_BCD.csv")
+
+# Convert to OCADS (will prompt for notes)
+ocads_data <- convert_OCADS(bcd_data, biochem.password, biochem.username)
+# ✓ OCADS conversion complete!
+# Mission: 18HU23573 (EXPOCODE: 18HU20230504)
+# Would you like to add submission notes? (y/n): y
+# [You type your notes...]
+
+# Convert to CCHDO (no prompt by default)
+cchdo_data <- convert_CCHDO(ocads_data)
+
+# Save your files
+write_csv(ocads_data, "mission_OCADS.csv")
+write_csv(cchdo_data, "mission_CCHDO.csv", quote = 'none')
+```
+
+## Typical Workflow
+
+### 1. Before Submission
+
+Check for previous notes to learn from past issues:
+
+```{r, eval=FALSE}
+# Check what issues were encountered before
+notes <- read_mission_notes("OCADS", "BBMP", 2022)
+cat(notes, sep = "\n")
+
+# Search for specific known issues
+flag_issues <- search_mission_notes("flag")
+```
+
+### 2. During Submission
+
+Keep track of any manual adjustments or issues encountered.
+
+### 3. After Submission
+
+Document everything you did:
+
+```{r, eval=FALSE}
+# Interactive prompt
+prompt_submission_notes("OCADS", "BBMP", 2023)
+
+# Or programmatically
+append_mission_notes(
+  platform = "OCADS",
+  mission = "BBMP", 
+  year = 2023,
+  notes = c(
+    "## Submission Summary",
+    "- Accession: 0228686",
+    "- Submitted to: alex.kozyr@noaa.gov",
+    "- Date: 2023-05-15",
+    "",
+    "## Issues Encountered",
+    "- Had to manually fix date formatting",
+    "- Updated CTDFLUOR sampling instrument to CTD",
+    "",
+    "## Action Items",
+    "- [ ] Follow up on pH metadata with lab",
+    "- [ ] Verify with Diana on funding numbers"
+  )
+)
+```
+
+## What to Document
+
+Good notes should include:
+
+### Essential Information
+- **Accession number**
+- **Submission date**
+- **Contact person/email**
+- **Submission status** (submitted, pending, resubmitted)
+
+### Technical Details
+- **Data issues** encountered and how they were resolved
+- **Metadata corrections** made manually
+- **Script bugs** discovered
+- **Manual adjustments** to files
+
+### Follow-up Items
+- **Action items** for future submissions
+- **Questions** to ask colleagues
+- **Verification tasks** needed
+
+### Lessons Learned
+- **What worked well**
+- **What to avoid** next time
+- **Useful patterns** or solutions
+
+## Example Entry
+
+Here's an example of a well-documented submission:
+
+```markdown
+# OCADS - BBMP 2023
+
+**Created:** 2023-05-15
+**Last Updated:** 2023-05-15
+**Accession Number:** 0240502
+
+---
+
+## Submission Details
+
+- **Status:** Submitted
+- **Submission Date:** 2023-05-15
+- **Contact:** alex.kozyr@noaa.gov
+- **Method:** Excel submission
+
+## Issues Encountered
+
+### Date Formatting
+- **Problem:** Dates from script formatted as YYYYMMDD instead of ISO format
+- **Solution:** Manually reformatted to YYYY-MM-DD
+- **Future:** Need to fix in data processing script
+
+### Metadata Corrections
+- Updated investigator names
+- Fixed special characters in abstract
+- Changed CTDFLUOR to CTD in sampling instrument
+
+## Files Submitted
+- `BBMP_2023_data.csv`
+- `BBMP_2023_metadata.xlsx`
+- Updated mission list
+
+## Action Items
+- [ ] Fix date formatting in processing script
+- [ ] Create special character cleaning function
+- [ ] Update instrument mapping in metadata template
+
+---
+
+*Submitted by: E. O'Grady*
+```
+
+## Advanced Usage
+
+### Creating New Mission Notes
+
+To start notes for a new mission:
+
+```{r, eval=FALSE}
+write_mission_notes(
+  platform = "OCADS",
+  mission = "BBMP",
+  year = 2024,
+  notes = c(
+    "# OCADS - BBMP 2024",
+    "",
+    "**Created:** " %+% Sys.Date(),
+    "",
+    "---",
+    "",
+    "## Submission Notes",
+    ""
+  )
+)
+```
+
+### Batch Operations
+
+Process notes across multiple missions:
+
+```{r, eval=FALSE}
+# Get all OCADS missions
+missions <- list_mission_notes("OCADS")
+
+# Check each for specific issue
+for (i in seq_len(nrow(missions))) {
+  notes <- readLines(missions$file[i])
+  if (any(grepl("pH", notes, ignore.case = TRUE))) {
+    cat("pH mentioned in:", missions$mission[i], "\n")
+  }
+}
+```
+
+## Tips and Best Practices
+
+1. **Document immediately** - Add notes right after submission while details are fresh
+
+2. **Be specific** - Include exact error messages, file names, and values changed
+
+3. **Use consistent formatting** - Follow the markdown structure in examples
+
+4. **Include context** - Explain *why* you made changes, not just *what* changed
+
+5. **Update regularly** - If you learn something new about an old submission, add a note
+
+6. **Search before asking** - Use `search_mission_notes()` to find previous solutions
+
+7. **Cross-reference** - Link related issues across missions
+
+8. **Action items** - Use `- [ ]` for unchecked tasks, `- [x]` for completed ones
+
+
+
+## Troubleshooting
+
+### Notes file not found
+
+If you get "No notes found", the file may not exist yet:
+
+```{r, eval=FALSE}
+# Create initial notes
+append_mission_notes("OCADS", "NewMission", 2024, 
+                     notes = "Initial submission")
+```
+
+### Search returns no results
+
+Try broader search terms or check spelling:
+
+```{r, eval=FALSE}
+# Too specific
+search_mission_notes("pH instrument calibration")
+
+# Better
+search_mission_notes("pH")
+```
+
+## See Also
+
+- `?read_mission_notes` - Full function documentation
+- `?append_mission_notes` - Adding notes documentation
+- `?search_mission_notes` - Search functionality
+- [Submission Guide](submission-guide.html) - Complete submission workflow
