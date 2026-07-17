@@ -209,7 +209,7 @@ write_csv(ocads_data,
 **What this function does:**
 - Connects to BioChem to retrieve sounding (bottom depth) data
 - **Validates data completeness**: Checks for carbonate chemistry parameters (ALKALI, PH_TOT, TCARBN, PCO2)
-- **Validates tracer data**: Checks for CFC and SF6 parameters
+- **Validates tracer data**: Checks for CFC-12, SF6, and DELO18 parameters
 - **Validates QC flags**: Identifies missing or suspicious flags (all zeros indicate no QC applied)
 - Translates BioChem method names to CCHDO/OCADS parameter names using lookup tables
 - Converts units (oxygen: mL/L → µmol/kg, nutrients: µmol/L → µmol/kg)
@@ -223,23 +223,132 @@ in BioChem.
 
 ## Step 5: Convert to CCHDO Format (if needed)
 
-CCHDO has slightly different formatting requirements than OCADS:
+CCHDO doesn't accept an ordinary CSV - it requires the WHP-exchange bottle format: a
+creation-stamp line, a units row, and an `END_DATA` terminator, in addition to the usual
+header/data rows (see https://exchange-format.readthedocs.io/). `convert_CCHDO()` reshapes
+the OCADS output to match; `write_CCHDO_exchange()` writes the actual `<EXPOCODE>_hy1.csv`
+file - don't `write_csv()` the result of `convert_CCHDO()` directly, it's missing that
+structure.
 
 ```{r convert-cchdo}
-# Convert OCADS output to CCHDO format
+# Convert OCADS output to CCHDO/WHP-exchange format.
+# Defaults check each station's position against the AR07W line (station 1 to station 17)
+# and only label it "AR07W" if it's within 50 km of that line - AZOMP also occupies
+# stations that aren't on AR07W (Scotian Slope/Rise, Bedford Basin, etc.), and those are
+# left with a blank SECT_ID rather than mislabelled. Review the "[SECT_ID]" console
+# messages and fill in blanks manually if they belong to a different, known section.
 cchdo_data <- convert_CCHDO(ocads_data)
 
-# Save with quote = 'none' for CCHDO requirements
-write_csv(cchdo_data,
-          file = here("data", "2025", "LAT2025146", "CCHDO", "LAT2025146_data.csv"),
-          quote = 'none')
+# Writes LAT2025146_hy1.csv (the required WHP-exchange bottle filename)
+write_CCHDO_exchange(
+  cchdo_data,
+  out_dir = here("data", "2025", "LAT2025146", "CCHDO")
+)
 ```
 
-**Key CCHDO differences:**
+**Key CCHDO/WHP-exchange differences:**
+- File structure: stamp line, units row, and `END_DATA` terminator (not a plain CSV)
+- File name: `<EXPOCODE>_hy1.csv`, not a mission-descriptor name
 - DATE format: YYYYMMDD (no dashes)
-- Column names: LATITUDE/LONGITUDE instead of BTL_LAT/BTL_LON
+- Column names: LATITUDE/LONGITUDE instead of BTL_LAT/BTL_LON; SECT_ID added, but only for
+  stations that geographically fall on the line (see below) - check the console output
+- DEPTH: WHP `DEPTH` is bottom depth (OCADS's `SOUNDING`), not the per-bottle sample depth
+  OCADS calls `DEPTH` - that column is dropped since it was already used to derive `CTDPRS`
 - Station names: alphanumeric only
 - NH3 renamed to NH4
+
+## Step 6: Convert to SDG 14.3.1 Format (if needed)
+
+The SDG 14.3.1 indicator tracks ocean acidification and requires a specific Excel (`.xlsx`) format.
+The `convert_SDG()` function takes your OCADS output and produces a submission-ready file with
+no manual editing required.
+
+```{r convert-sdg}
+# Convert OCADS output to SDG 14.3.1 format
+# The function writes the .xlsx file and returns the data invisibly
+sdg_data <- convert_SDG(
+  OCADS_fn = here("data", "2025", "LAT2025146", "LAT2025146_data.csv")
+)
+```
+
+The output file will be written automatically to:
+
+```
+data/SDG/<MOORING_NAME>/<MOORING_NAME>_data_SDG.xlsx
+```
+
+### SDG Platform Requirements
+
+The SDG 14.3.1 data portal enforces strict formatting rules. `convert_SDG()` satisfies all of
+them automatically:
+
+| Requirement | Column | How it is handled |
+|---|---|---|
+| Date as `YYYY-MM-DD` | `DATE_UTC` | Normalised through `as.Date()` regardless of input format |
+| Time as `HH:MM:SS` | `TIME_UTC` | Padded / reformatted to always produce 8-character strings |
+| Coordinates as Number | `LONGITUDE`, `LATITUDE` | Coerced with `as.numeric()` |
+| All variable columns as Number | all non-metadata cols | `mutate(across(..., as.numeric))` applied before writing |
+| `.xlsx` file format | — | Written with `openxlsx`; cell types set explicitly |
+
+> **Why `openxlsx` matters:** The older `xlsx` package writes all values as character strings
+> regardless of the R class. `openxlsx` sets proper Excel cell types (Number, Text) so the SDG
+> portal recognises numeric columns without any manual reformatting in Excel.
+
+### What `convert_SDG()` Does
+
+- Loads the SDG template (`SDG_14_3_1-data_submission-2019.xlsx`) to preserve required header
+  structure
+- Maps OCADS column names to SDG names using the `ocads_sdg_data.xlsx` lookup table
+- Renames flag columns from `_FLAG_W` to ` FLAG` convention
+- Derives `DEPTH_SAMPLING` from CTD pressure (via `oce::swDepth()`) if the depth column is
+  missing
+- Applies `YYYY-MM-DD` date style and `HH:MM:SS` time style to the correct Excel columns
+- Applies a numeric cell format to all variable columns
+
+### Troubleshooting SDG Submissions
+
+**"The date column is not recognised"**
+
+The portal expects `YYYY-MM-DD`. Check your input file for slash-delimited dates
+(`MM/DD/YYYY`). `convert_SDG()` will warn you and correct this automatically, but verify the
+output if you see:
+
+```
+Warning: Slash-delimited date format detected — converting to YYYY-MM-DD.
+```
+
+**"Coordinates are flagged as text"**
+
+This can happen if the upstream OCADS file has coordinates stored as character strings (e.g.,
+`"44.6700N"`). Ensure coordinates in your OCADS file are plain decimal degree numbers with no
+hemisphere suffix before calling `convert_SDG()`.
+
+**"TIME_UTC is all NA — falling back to BTL_TIME"**
+
+Some OCADS exports store bottle time in `BTL_TIME` rather than `TIME_UTC`. The function falls
+back automatically, but review the output to confirm times are populated correctly.
+
+**Depth column missing**
+
+If `DEPTH_SAMPLING` is empty in your OCADS file, `convert_SDG()` will derive it from
+`CTDPRS` using the `oce::swDepth()` function and issue a warning:
+
+```
+Warning: DEPTH_SAMPLING contains NAs — deriving depth from CTDPRS.
+```
+
+Verify the derived depths are reasonable before submission.
+
+### Reference Files Required
+
+`convert_SDG()` expects two reference files in your working directory:
+
+| File | Purpose |
+|---|---|
+| `SDG_14_3_1-data_submission-2019.xlsx` | Official SDG template (provides header rows) |
+| `ocads_sdg_data.xlsx` | Column name mapping between OCADS and SDG |
+
+Contact the data manager if either file is missing or needs to be updated with new parameters.
 
 # Understanding the Output
 
@@ -262,7 +371,7 @@ During conversion, you may see validation messages about data completeness:
 ### Tracer Parameters
 
 ```
-[NOTE] Missing tracer parameters: CFC-12, SF6
+[NOTE] Missing tracer parameters: CFC-12, SF6, DELO18
 ```
 
 **What it means:** The expected tracer gases weren't found in BioChem for this mission.
@@ -388,7 +497,7 @@ After generating your submission files:
 - **Submission Guide**: See `vignette("submission-guide")` for platform-specific instructions
 - **BioChem Query**: `inst/BCD_QUERY.sql` for the standard extraction query
 - **Lookup Tables**: `LookupTables.R` for managing reference data
-- **Function Documentation**: `?convert_OCADS`, `?convert_CCHDO`
+- **Function Documentation**: `?convert_OCADS`, `?convert_CCHDO`, `?convert_SDG`
 
 # Getting Help
 
