@@ -204,7 +204,7 @@ extract_from_biochem <- function(mission_descriptor,
     }
 
     # Check for tracers
-    tracer_params <- c("CFC-11", "CFC-12", "CFC-113", "SF6")
+    tracer_params <- c("CFC-12", "SF6", "DELO18")
     tracer_found <- intersect(tracer_params, params_found)
     if (length(tracer_found) > 0) {
       message("  ✓ Found tracer parameters: ", paste(tracer_found, collapse = ", "))
