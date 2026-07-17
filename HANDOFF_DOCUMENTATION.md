@@ -46,13 +46,24 @@ BIOsubmissions/
 
 ### 1. Integrated CCHDO Conversion Function
 - **Location**: `R/CCHDO.R`
-- **Function**: `convert_CCHDO(ocads_data)`
-- **Purpose**: Replaces manual template scripting
+- **Functions**: `convert_CCHDO(ocads_data, sect_id)` + `write_CCHDO_exchange(cchdo_data, out_dir)`
+- **Purpose**: Replaces manual template scripting and produces a real WHP-exchange
+  `<EXPOCODE>_hy1.csv` file (stamp line, units row, `END_DATA` terminator) - see
+  https://exchange-format.readthedocs.io/. Do NOT `write_csv()` the result of
+  `convert_CCHDO()` directly; it is only the reshaped data, not the file structure CCHDO
+  requires.
+- **SECT_ID is not applied blindly**: `convert_CCHDO()` checks each station's
+  LATITUDE/LONGITUDE against the AR07W line (defaults: station 1 at 53 40.76N 55 32.95W to
+  station 17 at 57 49.81N 51 21.18W, 50 km corridor) and only labels stations that fall
+  within it. AZOMP also samples off-line stations (Scotian Slope/Rise, Bedford Basin, etc.)
+  that have no formal section - those are left with a blank SECT_ID. Check the `[SECT_ID]`
+  console messages after each run and fill in blanks manually if they belong to a different,
+  known section.
 - **Usage**:
   ```r
   ocads_data <- convert_OCADS(bcd_data, user, pass)
-  cchdo_data <- convert_CCHDO(ocads_data)
-  write_csv(cchdo_data, "output.csv", quote = 'none')
+  cchdo_data <- convert_CCHDO(ocads_data)  # AR07W line/corridor defaults
+  write_CCHDO_exchange(cchdo_data, out_dir = "output/dir")
   ```
 
 ### 2. Comprehensive Documentation
@@ -80,7 +91,7 @@ BIOsubmissions/
 
 The package includes automated checks for:
 - Missing carbonate chemistry parameters (ALKALI, PH_TOT, TCARBN, PCO2)
-- Missing tracer data (CFC-11, CFC-12, CFC-113, SF6)
+- Missing tracer data (CFC-12, SF6, DELO18)
 - Suspicious QC flags (all zeros, missing flags)
 - Data integrity and unit conversions
 
@@ -107,7 +118,8 @@ The package includes automated checks for:
 
 4. **Convert to CCHDO (if needed)**
    ```r
-   cchdo_data <- convert_CCHDO(ocads_data)
+   cchdo_data <- convert_CCHDO(ocads_data, sect_id = "AR07W")
+   write_CCHDO_exchange(cchdo_data, out_dir = "output/dir")
    ```
 
 5. **Prepare metadata and submit**
@@ -133,7 +145,8 @@ library(BIOsubmissions)
 source("biochem_creds.R")
 data <- extract_from_biochem("CAR2023573", biochem.user, biochem.password)
 ocads <- convert_OCADS(data, biochem.password, biochem.user)
-cchdo <- convert_CCHDO(ocads)
+cchdo <- convert_CCHDO(ocads, sect_id = "AR07W")
+write_CCHDO_exchange(cchdo, out_dir = "output/dir")
 ```
 
 ---
@@ -204,15 +217,13 @@ cchdo <- convert_CCHDO(ocads)
 ### Regular Maintenance
 - **Update lookup tables**: When new ships or methods are added
 - **Review validation rules**: If new parameter types are added
-- **Test with new data**: Before major missions
 - **Update documentation**: When workflow changes
 
 ### When to Update Lookup Tables
 
 **Platform (ships):**
 - New vessel used for sampling
-- Ship name changes or mergers
-- Contact: Shared Models database administrator
+
 
 **Methods:**
 - New analytical technique added in BioChem
@@ -310,14 +321,13 @@ devtools::test()
 ## Key Contacts
 
 ### Internal (DFO)
-- **BioChem Support**: biochem@dfo-mpo.gc.ca
-- **AZMP/AZOMP Data**: [Current program coordinator]
-- **Shared Models Database**: [Current administrator]
+- **BioChem Support**: ODIS
+- **AZMP/AZOMP Data**: Lindsay Beazley/ Marc Ringuette
 
 ### External (Data Platforms)
-- **OCADS**: Check website for current submission contact
-- **CCHDO**: cchdo@ucsd.edu
-- **SDG/IODE**: https://www.iode.org/
+- **OCADS**: Alex Kozyr - NOAA Affiliate <alex.kozyr@noaa.gov>
+- **CCHDO**: cchdo@ucsd.edu 
+- **SDG/IODE**: Schoo, Katherina <k.schoo@unesco.org> , Isensee, Kirsten <k.isensee@unesco.org>
 
 ---
 
@@ -344,7 +354,6 @@ devtools::test()
 - [ ] BioChem database access working
 - [ ] Can read/write to shared file locations
 - [ ] Have contact info for platform submission coordinators
-- [ ] Access to Shared Models database (for ship codes)
 
 ### Documentation Review
 - [ ] Read all vignettes
@@ -366,7 +375,6 @@ devtools::test()
 - **CCHDO Exchange Format**: https://exchange-format.readthedocs.io/
 - **WOCE Quality Flags**: http://cchdo.github.io/hdo-assets/documentation/WHP_Exchange_Description.pdf
 - **OCADS**: https://oceans.imas.utas.edu.au/OCADS/
-- **BioChem**: Internal DFO documentation
 
 ### Historical Context
 - Previous workflow by Reid Steele
@@ -377,14 +385,6 @@ devtools::test()
 
 ## Questions to Ask Previous Maintainer
 
-1. Are there any missions currently in progress?
-2. What are the most common preprocessing issues with recent data?
-3. Have any new ships or methods been added that aren't in lookup tables?
-4. Are there pending submissions or revisions requested by platforms?
-5. What is the typical timeline for processing a new mission?
-6. Who are the key stakeholders for each platform submission?
-7. Are there any known bugs or limitations not documented?
-8. What improvements were planned but not implemented?
 
 ---
 
