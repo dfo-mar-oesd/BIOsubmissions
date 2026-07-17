@@ -9,8 +9,6 @@
 #' @return print updated table
 #' @export
 #'
-#' @examples
-#' update_lookup(table = 'CRM', data = data.frame(MISSI))
 update_lookup <- function(table, column, value) {
   # Input validation: Check that table exists and all values are strings
   if (!is.character(table) || !is.character(column) || !is.character(value)) {
